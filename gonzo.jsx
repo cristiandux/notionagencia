@@ -1275,9 +1275,13 @@ function ClientesPage({ nav, clients, user, addClient }) {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 140px 120px", gap: 12 }}>
             <input className="input" value={form.sector} onChange={e => setForm(f => ({ ...f, sector: e.target.value }))} placeholder="Sector" />
-            <input className="input" value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value }))} placeholder="Plan" />
+            <select className="input" value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value }))}>
+              <option value="Retainer">Retainer</option>
+              <option value="Puntual">Puntual</option>
+              <option value="Recurrente">Recurrente</option>
+            </select>
             <input className="input" value={form.mrr} onChange={e => setForm(f => ({ ...f, mrr: e.target.value }))} placeholder="MRR" />
-            <input className="input" type="number" value={form.rate} onChange={e => setForm(f => ({ ...f, rate: e.target.value }))} placeholder="€/h" />
+            <input className="input" type="number" value={form.rate} onChange={e => setForm(f => ({ ...f, rate: e.target.value }))} placeholder="Precio acción" />
           </div>
           {err && <div className="t-cap" style={{ color: "#FF3B30", marginTop: 12 }}>{err}</div>}
           <div className="t-mic" style={{ marginTop: 10, color: "rgba(0,0,0,.48)" }}>Si escribes un email, se crea también la invitación de cliente para ese workspace.</div>
@@ -2613,16 +2617,17 @@ function TimePage({ clients, timeEntries, addTimeEntry, removeTimeEntry }) {
       const c = clients[id]; const entries = timeEntries.filter((t) => t.client === id);
       const h = entries.reduce((a, t) => a + t.minutes, 0) / 60;
       const mrr = parseInt((c.mrr || "€0").replace(/[€.]/g, ""));
-      const real = h > 0 ? mrr / h : 0; const tgt = c.rate || 0;
+      const real = entries.length > 0 ? mrr / entries.length : 0;
+      const tgt = c.rate || 0;
       return { id, ...c, hours: h, mrr, real, tgt, ok: real >= tgt, n: entries.length };
     });
   }, [clients, timeEntries]);
   return (
     <Shell>
       <div style={{ marginBottom: 32 }}>
-        <div className="t-nano spaced-md" style={{ color: "rgba(0,0,0,.4)", marginBottom: 12 }}>HORAS REALES VS COBRADAS</div>
+        <div className="t-nano spaced-md" style={{ color: "rgba(0,0,0,.4)", marginBottom: 12 }}>ACCIONES REALES VS COBRADAS</div>
         <h1 className="t-display" style={{ marginBottom: 16 }}>Time tracking.</h1>
-        <p className="t-subnav" style={{ color: "rgba(0,0,0,.72)", maxWidth: 720 }}>¿Cuánto te paga realmente cada cliente por hora trabajada?</p>
+        <p className="t-subnav" style={{ color: "rgba(0,0,0,.72)", maxWidth: 720 }}>¿Cuánto te paga realmente cada cliente por acción registrada?</p>
       </div>
       {tracking ? (
         <div className="card halo-bg" style={{ padding: 32, color: "#fff", marginBottom: 32 }}>
@@ -2656,15 +2661,15 @@ function TimePage({ clients, timeEntries, addTimeEntry, removeTimeEntry }) {
                   <div className="t-mic" style={{ color: "rgba(0,0,0,.5)" }}>{p.n} sesiones · {p.hours.toFixed(1)}h · cobras €{p.mrr}/mes</div>
                 </div>
                 <div style={{ textAlign: "right" }}>
-                  <div className="t-nano spaced-md" style={{ color: "rgba(0,0,0,.4)", marginBottom: 2 }}>€/H REAL</div>
+                  <div className="t-nano spaced-md" style={{ color: "rgba(0,0,0,.4)", marginBottom: 2 }}>€/ACC REAL</div>
                   <div style={{ fontSize: 28, fontWeight: 600, letterSpacing: "-0.4px", color: p.ok ? "#34C759" : "#FF3B30" }}>€{p.real.toFixed(1)}</div>
-                  <div className="t-mic" style={{ color: "rgba(0,0,0,.5)" }}>objetivo: €{p.tgt}</div>
+                  <div className="t-mic" style={{ color: "rgba(0,0,0,.5)" }}>precio acción: €{p.tgt}</div>
                 </div>
               </div>
               <div style={{ height: 6, background: "#f5f5f7", borderRadius: 999, overflow: "hidden" }}>
                 <div style={{ height: "100%", width: `${(ratio / 1.5) * 100}%`, background: p.ok ? "linear-gradient(90deg,#34C759,#1d8c3f)" : "linear-gradient(90deg,#FF9500,#FF3B30)", transition: "width 600ms" }} />
               </div>
-              {!p.ok && p.hours > 0 && <div className="t-cap" style={{ marginTop: 10, color: "#FF3B30", display: "flex", alignItems: "center", gap: 6 }}><AlertCircle size={12} />Estás €{(p.tgt - p.real).toFixed(0)}/h por debajo del objetivo. Subir tarifa o reducir alcance.</div>}
+              {!p.ok && p.n > 0 && <div className="t-cap" style={{ marginTop: 10, color: "#FF3B30", display: "flex", alignItems: "center", gap: 6 }}><AlertCircle size={12} />Estás €{(p.tgt - p.real).toFixed(0)}/acc por debajo del objetivo. Subir precio o ajustar alcance.</div>}
             </div>
           );
         })}
