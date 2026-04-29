@@ -19,6 +19,35 @@ import { createClient } from "@supabase/supabase-js";
 const FONT = `-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif`;
 const SERIF = `"Cormorant Garamond", "Playfair Display", Georgia, serif`;
 
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("app render error:", error, info);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div style={{ minHeight: "100vh", background: "#0a1729", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: FONT }}>
+        <div style={{ maxWidth: 760, width: "100%", background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 18, padding: 28 }}>
+          <div style={{ fontSize: 28, marginBottom: 10 }}>Error de aplicacion</div>
+          <div style={{ color: "rgba(255,255,255,.68)", marginBottom: 18 }}>La app ha capturado el fallo. Copia este mensaje para depurarlo:</div>
+          <pre style={{ whiteSpace: "pre-wrap", overflow: "auto", background: "rgba(0,0,0,.28)", borderRadius: 12, padding: 16, color: "#ffb4ab", fontSize: 13 }}>{this.state.error?.stack || this.state.error?.message || String(this.state.error)}</pre>
+          <button onClick={() => window.location.reload()} style={{ marginTop: 18, border: "none", borderRadius: 999, padding: "10px 18px", cursor: "pointer", background: "#fff", color: "#0a1729", fontFamily: "inherit" }}>Recargar</button>
+        </div>
+      </div>
+    );
+  }
+}
+
 /* ══════════════════════════════════════════════════════════════════
    CONFIGURACIÓN DE BASE DE DATOS — SUPABASE
    ──────────────────────────────────────────────────────────────────
@@ -259,6 +288,25 @@ const fromDb = (c) => {
   });
   if (!Array.isArray(normalized.rawFiles)) normalized.rawFiles = base.rawFiles;
   if (!Array.isArray(normalized.replyTemplates)) normalized.replyTemplates = base.replyTemplates;
+  normalized.palette = normalized.palette.filter(Boolean).map((color, index) => ({
+    id: color.id || `c${index}`,
+    hex: typeof color.hex === "string" && color.hex ? color.hex : "#888888",
+    name: color.name || "Color",
+  }));
+  normalized.growth = normalized.growth.filter(Boolean).map((item) => ({
+    ...item,
+    m: item.m || "",
+    v: Number(item.v) || 0,
+  }));
+  normalized.goals = normalized.goals.filter(Boolean).map((item, index) => ({
+    id: item.id || `g${index}`,
+    label: item.label || "Objetivo",
+    current: Number(item.current) || 0,
+    target: Number(item.target) || 1,
+    unit: item.unit || "",
+  }));
+  normalized.posts = normalized.posts.filter(Boolean);
+  normalized.comments = normalized.comments.filter(Boolean);
   return normalized;
 };
 const toDb = ({ goalText, rawFiles, replyTemplates, ...rest }) => ({ ...rest, goal_text: goalText, raw_files: rawFiles, reply_templates: replyTemplates });
@@ -395,7 +443,8 @@ const WORKSPACES = DEFAULT_WORKSPACES;
 /* ══════════════════════════════════════════════════════════════════
    CLIENTE VACÍO — plantilla base para nuevos clientes
 ══════════════════════════════════════════════════════════════════ */
-const EMPTY_CLIENT = (slug = "") => ({
+function EMPTY_CLIENT(slug = "") {
+  return {
   slug,
   name: "",
   tagline: "",
@@ -420,8 +469,9 @@ const EMPTY_CLIENT = (slug = "") => ({
   posts: [],
   comments: [],
   replyTemplates: [],
-  contact: [],
-});
+    contact: [],
+  };
+}
 
 /* ══════════════════════════════════════════════════════════════════
    DATOS INICIALES VACÍOS — sin simulaciones
@@ -434,7 +484,7 @@ const WORKSPACES0 = DEFAULT_WORKSPACES;
 /* ══════════════════════════════════════════════════════════════════
    GONZO APP — ROOT
 ══════════════════════════════════════════════════════════════════ */
-export default function GonzoApp() {
+function GonzoAppInner() {
   const [user, setUser] = useState(null);
   const [activeWs, setActiveWs] = useState(null);
   const [booting, setBooting] = useState(true);
@@ -559,6 +609,14 @@ export default function GonzoApp() {
 /* ══════════════════════════════════════════════════════════════════
    BANNER: configuración de base de datos
 ══════════════════════════════════════════════════════════════════ */
+export default function GonzoApp() {
+  return (
+    <AppErrorBoundary>
+      <GonzoAppInner />
+    </AppErrorBoundary>
+  );
+}
+
 function DBSetupBanner() {
   const [open, setOpen] = useState(false);
   return (
@@ -2519,7 +2577,7 @@ function TimePage({ clients, timeEntries, addTimeEntry, removeTimeEntry }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => { if (!tracking) return; const iv = setInterval(() => setElapsed(Date.now() - tracking.startTime), 1000); return () => clearInterval(iv); }, [tracking]);
   const start = (cid, task) => setTracking({ cid, task, startTime: Date.now() });
-  const stop = () => { if (!tracking) return; const m = Math.max(1, Math.round(elapsed / 60000)); addTimeEntry([{ id: `t${Date.now()}`, client: tracking.cid, task: tracking.task, minutes: m, date: new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "short" }).toUpperCase() }, ...timeEntries]); setTracking(null); setElapsed(0); };
+  const stop = () => { if (!tracking) return; const m = Math.max(1, Math.round(elapsed / 60000)); addTimeEntry({ id: `t${Date.now()}`, client: tracking.cid, task: tracking.task, minutes: m, date: new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "short" }).toUpperCase() }); setTracking(null); setElapsed(0); };
   const rm = (id) => removeTimeEntry(id);
   const fmt = (ms) => { const s = Math.floor(ms / 1000); return `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
   const profitability = useMemo(() => {
