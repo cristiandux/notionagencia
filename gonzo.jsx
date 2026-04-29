@@ -203,6 +203,15 @@ const dbInvitations = {
   },
   upsert: async (invite) => {
     if (!DB_READY) return invite;
+    const { data: rpcData, error: rpcError } = await supabase.rpc("upsert_invitation", {
+      invite_email: invite.email,
+      invite_role: invite.role,
+      invite_workspace: invite.workspace,
+      invite_workspaces: invite.workspaces,
+    });
+    if (!rpcError && rpcData) return rpcData;
+    if (rpcError) console.error("upsert_invitation rpc:", rpcError);
+
     const { data, error } = await supabase.from("invitations").upsert(invite).select().single();
     if (error) {
       console.error("invitation upsert:", error);

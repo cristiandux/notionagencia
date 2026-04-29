@@ -240,6 +240,50 @@ $$;
 
 grant execute on function ensure_my_profile() to authenticated;
 
+create or replace function upsert_invitation(
+  invite_email text,
+  invite_role text,
+  invite_workspace text default null,
+  invite_workspaces text[] default null
+)
+returns invitations
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  inv invitations;
+begin
+  if current_user_role() <> 'admin' then
+    raise exception 'only admins can manage invitations';
+  end if;
+
+  if invite_role not in ('admin','socio','editor','client') then
+    raise exception 'invalid role';
+  end if;
+
+  insert into invitations (email, role, workspace, workspaces, invited_by)
+  values (
+    lower(trim(invite_email)),
+    invite_role,
+    case when invite_role = 'client' then invite_workspace else null end,
+    case when invite_role = 'client' then null else coalesce(invite_workspaces, array['frame']) end,
+    auth.uid()
+  )
+  on conflict (email) do update
+    set role = excluded.role,
+        workspace = excluded.workspace,
+        workspaces = excluded.workspaces,
+        invited_by = excluded.invited_by,
+        updated_at = now()
+  returning * into inv;
+
+  return inv;
+end;
+$$;
+
+grant execute on function upsert_invitation(text, text, text, text[]) to authenticated;
+
 -- INVITATIONS
 drop policy if exists "invitations_admin_all" on invitations;
 create policy "invitations_admin_all" on invitations for all
