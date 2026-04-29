@@ -974,7 +974,7 @@ function Workspace({ user, activeWs, onSwitchWs, onLogout, clients, updateClient
         <div className={`sidebar-bd ${mobNav ? "open" : ""}`} onClick={() => setMobNav(false)} />
         <Sidebar user={user} page={page} cid={cid} nav={nav} exp={exp} toggleSec={toggleSec} open={mobNav} onLogout={onLogout} ws={activeWs} onSearch={onSearch} clients={clients} />
         <main style={{ flex: 1, overflow: "auto" }} className="sb">
-          <Topbar page={page} cid={cid} nav={nav} onMenu={() => setMobNav(true)} onSearch={onSearch} />
+          <Topbar page={page} cid={cid} nav={nav} onMenu={() => setMobNav(true)} onSearch={onSearch} clients={clients} />
           <div className="fade-up" key={page + (cid || "") + activeWs}>
             {page === "home" && <HomePage user={user} nav={nav} clients={clients} timeEntries={timeEntries} deals={deals} />}
             {page === "clientes" && !cid && <ClientesPage nav={nav} clients={clients} user={user} addClient={addClient} />}
@@ -1074,7 +1074,7 @@ function Sidebar({ user, page, cid, nav, exp, toggleSec, open, onLogout, ws, onS
 }
 
 /* ─── TOPBAR ────────────────────────────────────────────────────── */
-function Topbar({ page, cid, nav, onMenu, onSearch }) {
+function Topbar({ page, cid, nav, onMenu, onSearch, clients }) {
   const map = { home: "Inicio", calendar: "Content Calendar", inbox: "Inbox unificado", crm: "CRM · Leads", time: "Time tracking", goals: "Goals & Reportes", templates: "Plantillas", ideas: "Ideas", users: "Usuarios y roles" };
   const trail = () => {
     if (map[page]) return [map[page]];
