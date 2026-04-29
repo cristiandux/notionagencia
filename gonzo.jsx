@@ -245,7 +245,12 @@ const dbClients = {
   },
   upsert: async (slug, patch) => {
     if (!DB_READY) return;
-    await supabase.from("clients").upsert({ slug, ...toDb(patch) });
+    const { data, error } = await supabase.from("clients").upsert({ slug, ...toDb(patch) }).select().single();
+    if (error) {
+      console.error("client upsert:", error);
+      return null;
+    }
+    return fromDb(data);
   },
   updateField: async (slug, field, value) => {
     if (!DB_READY) return;
@@ -454,7 +459,9 @@ export default function GonzoApp() {
   const addClient = async (slug, data) => {
     const nc = { ...EMPTY_CLIENT(slug), ...data };
     setClients(c => ({ ...c, [slug]: nc }));
-    await dbClients.upsert(slug, nc);
+    const saved = await dbClients.upsert(slug, nc);
+    if (saved) setClients(c => ({ ...c, [slug]: saved }));
+    return saved || nc;
   };
 
   // Time entries
@@ -871,7 +878,7 @@ function Workspace({ user, activeWs, onSwitchWs, onLogout, clients, updateClient
           <Topbar page={page} cid={cid} nav={nav} onMenu={() => setMobNav(true)} onSearch={onSearch} />
           <div className="fade-up" key={page + (cid || "") + activeWs}>
             {page === "home" && <HomePage user={user} nav={nav} clients={clients} timeEntries={timeEntries} deals={deals} />}
-            {page === "clientes" && !cid && <ClientesPage nav={nav} clients={clients} user={user} />}
+            {page === "clientes" && !cid && <ClientesPage nav={nav} clients={clients} user={user} addClient={addClient} />}
             {page === "clientes" && cid && <ClientDetail clientId={cid} clients={clients} updateClient={updateClient} user={user} timeEntries={timeEntries} setTimeEntries={setTimeEntries} />}
             {page === "calendar" && <ContentCalendar clients={clients} updateClient={updateClient} />}
             {page === "inbox" && <InboxPage clients={clients} updateClient={updateClient} />}
@@ -1085,9 +1092,35 @@ function HomePage({ user, nav, clients, timeEntries, deals }) {
 /* ════════════════════════════════════════════════════════════════════
    CLIENTES LIST
 ════════════════════════════════════════════════════════════════════ */
-function ClientesPage({ nav, clients, user }) {
+function ClientesPage({ nav, clients, user, addClient }) {
   const ids = Object.keys(clients).filter(k => k !== "frame");
   const isEd = user.role === "editor";
+  const canCreate = user.role === "admin" || user.role === "socio";
+  const [showNew, setShowNew] = useState(false);
+  const [err, setErr] = useState("");
+  const [form, setForm] = useState({ name: "", slug: "", sector: "", plan: "Retainer", mrr: "", rate: 50 });
+  const slugify = (value) => value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+  const setName = (name) => setForm(f => ({ ...f, name, slug: f.slug || slugify(name) }));
+  const create = async (e) => {
+    e?.preventDefault?.();
+    setErr("");
+    const slug = slugify(form.slug || form.name);
+    if (!slug || !form.name.trim()) { setErr("Nombre y slug son obligatorios."); return; }
+    if (clients[slug]) { setErr("Ya existe un cliente con ese slug."); return; }
+    const saved = await addClient(slug, {
+      name: form.name.trim(),
+      sector: form.sector.trim(),
+      plan: form.plan.trim(),
+      mrr: form.mrr.trim(),
+      rate: Number(form.rate) || 0,
+      emoji: "○",
+      tagline: "",
+    });
+    if (!saved) { setErr("No se pudo crear. Revisa permisos RLS de clients."); return; }
+    setShowNew(false);
+    setForm({ name: "", slug: "", sector: "", plan: "Retainer", mrr: "", rate: 50 });
+    nav("clientes", slug);
+  };
   return (
     <Shell>
       <div style={{ marginBottom: 48 }}>
@@ -1097,6 +1130,31 @@ function ClientesPage({ nav, clients, user }) {
           {isEd ? "Selecciona un cliente para descargar su material bruto." : "Cada marca, un acento distinto. Primero escucho; después grabo."}
         </p>
       </div>
+      {canCreate && (
+        <div style={{ marginTop: -28, marginBottom: 32 }}>
+          <button onClick={() => setShowNew(v => !v)} className="btn btn-blue"><Plus size={14} />Nuevo cliente</button>
+        </div>
+      )}
+      {showNew && (
+        <form onSubmit={create} className="card" style={{ padding: 24, marginBottom: 32, background: "#f5f5f7" }}>
+          <div className="t-body-em" style={{ marginBottom: 16 }}>Crear cliente / workspace</div>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(180px,1fr) minmax(160px,220px)", gap: 12, marginBottom: 12 }}>
+            <input className="input" value={form.name} onChange={e => setName(e.target.value)} placeholder="Nombre del cliente" autoFocus />
+            <input className="input" value={form.slug} onChange={e => setForm(f => ({ ...f, slug: slugify(e.target.value) }))} placeholder="slug-workspace" />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 140px 120px", gap: 12 }}>
+            <input className="input" value={form.sector} onChange={e => setForm(f => ({ ...f, sector: e.target.value }))} placeholder="Sector" />
+            <input className="input" value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value }))} placeholder="Plan" />
+            <input className="input" value={form.mrr} onChange={e => setForm(f => ({ ...f, mrr: e.target.value }))} placeholder="MRR" />
+            <input className="input" type="number" value={form.rate} onChange={e => setForm(f => ({ ...f, rate: e.target.value }))} placeholder="€/h" />
+          </div>
+          {err && <div className="t-cap" style={{ color: "#FF3B30", marginTop: 12 }}>{err}</div>}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+            <button type="button" onClick={() => setShowNew(false)} className="btn btn-ghost">Cancelar</button>
+            <button type="submit" className="btn btn-blue"><Plus size={12} />Crear</button>
+          </div>
+        </form>
+      )}
       {ids.length === 0 && (
         <div className="card" style={{ padding: 40, textAlign: "center", background: "#f5f5f7" }}>
           <Users size={28} style={{ marginBottom: 12, color: "rgba(0,0,0,.36)" }} />

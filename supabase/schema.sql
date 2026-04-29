@@ -265,7 +265,8 @@ create policy "clients_client_own" on clients for select
   );
 
 create policy "clients_admin_socio_write" on clients for all
-  using (current_user_role() in ('admin','socio'));
+  using (current_user_role() in ('admin','socio'))
+  with check (current_user_role() in ('admin','socio'));
 
 -- TIME ENTRIES
 drop policy if exists "time_team_only" on time_entries;
