@@ -2818,9 +2818,17 @@ function UsersPage({ clients, currentUser }) {
   const [invites, setInvites] = useState([]);
   const [busy, setBusy] = useState(true);
   const [msg, setMsg] = useState("");
-  const [form, setForm] = useState({ email: "", role: "client", workspace: "frame" });
+  const [form, setForm] = useState({ email: "", role: "client", workspace: "frame", workspacesText: "frame" });
   const clientOptions = ["frame", ...Object.keys(clients).filter(k => k !== "frame")];
   const roles = ["admin", "socio", "editor", "client"];
+  const parseWorkspaces = (value) => [...new Set((value || "").split(",").map(s => s.trim()).filter(Boolean))];
+  const normalizeAccess = (role, workspace, workspacesText) => {
+    if (role === "client") {
+      return { workspace: workspace || "frame", workspaces: null };
+    }
+    const list = parseWorkspaces(workspacesText);
+    return { workspace: null, workspaces: list.length ? list : ["frame"] };
+  };
 
   const load = async () => {
     setBusy(true);
@@ -2834,13 +2842,9 @@ function UsersPage({ clients, currentUser }) {
 
   const saveProfile = async (p, patch) => {
     const next = { ...p, ...patch };
-    if (next.role === "client") {
-      next.workspace = next.workspace || "frame";
-      next.workspaces = null;
-    } else {
-      next.workspace = null;
-      next.workspaces = next.workspaces?.length ? next.workspaces : ["frame"];
-    }
+    const access = normalizeAccess(next.role, next.workspace || p.workspace, (next.workspaces || p.workspaces || ["frame"]).join(", "));
+    next.workspace = access.workspace;
+    next.workspaces = access.workspaces;
     setProfiles(list => list.map(x => x.id === p.id ? next : x));
     const saved = await dbUsers.update(p.id, { role: next.role, workspace: next.workspace, workspaces: next.workspaces });
     if (!saved) setMsg("No se pudo guardar el perfil. Revisa RLS de profiles.");
@@ -2848,13 +2852,15 @@ function UsersPage({ clients, currentUser }) {
 
   const createInvite = async (e) => {
     e?.preventDefault?.();
+    setMsg("");
     const email = form.email.trim().toLowerCase();
-    if (!email) return;
+    if (!email) { setMsg("El email es obligatorio."); return; }
+    const access = normalizeAccess(form.role, form.workspace, form.workspacesText);
     const invite = {
       email,
       role: form.role,
-      workspace: form.role === "client" ? form.workspace : null,
-      workspaces: form.role === "client" ? null : [form.workspace || "frame"],
+      workspace: access.workspace,
+      workspaces: access.workspaces,
       invited_by: currentUser.id,
     };
     const saved = await dbInvitations.upsert(invite);
@@ -2862,7 +2868,7 @@ function UsersPage({ clients, currentUser }) {
       setMsg("No se pudo crear la invitación. Aplica el SQL de invitations en Supabase.");
       return;
     }
-    setForm({ email: "", role: "client", workspace: "frame" });
+    setForm({ email: "", role: "client", workspace: "frame", workspacesText: "frame" });
     setMsg("Invitación guardada. Cuando ese email se registre, recibirá su rol automáticamente.");
     await load();
   };
@@ -2882,12 +2888,14 @@ function UsersPage({ clients, currentUser }) {
       {msg && <div className="card" style={{ padding: 16, marginBottom: 24, background: "#fff7e6", borderColor: "rgba(255,149,0,.24)", color: "#8a5a00" }}>{msg}</div>}
       <form onSubmit={createInvite} className="card" style={{ padding: 24, marginBottom: 32 }}>
         <div className="t-body-em" style={{ marginBottom: 16 }}>Invitar o preasignar acceso</div>
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) 150px 180px auto", gap: 12, alignItems: "center" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) 150px 180px minmax(220px,1fr) auto", gap: 12, alignItems: "center" }}>
           <input className="input" type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="email@dominio.com" />
           <select className="input" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}>{roles.map(r => <option key={r} value={r}>{r}</option>)}</select>
           <select className="input" value={form.workspace} onChange={e => setForm(f => ({ ...f, workspace: e.target.value }))}>{clientOptions.map(id => <option key={id} value={id}>{clients[id]?.name || id}</option>)}</select>
+          <input className="input" value={form.workspacesText} onChange={e => setForm(f => ({ ...f, workspacesText: e.target.value }))} placeholder="frame, cliente-a, cliente-b" />
           <button className="btn btn-primary" type="submit"><UserPlus size={14} />Guardar</button>
         </div>
+        <div className="t-mic" style={{ marginTop: 10, color: "rgba(0,0,0,.48)" }}>Para `client` se usa un solo workspace. Para `admin`, `socio` o `editor`, escribe varios separados por coma.</div>
       </form>
       <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 32 }}>
         <div style={{ padding: 20, borderBottom: "1px solid rgba(0,0,0,.06)", display: "flex", justifyContent: "space-between" }}>
@@ -2903,7 +2911,13 @@ function UsersPage({ clients, currentUser }) {
                   <td style={{ padding: 16 }}>{p.email}</td>
                   <td>{p.name}</td>
                   <td><select className="input" value={p.role || "client"} onChange={e => saveProfile(p, { role: e.target.value })}>{roles.map(r => <option key={r} value={r}>{r}</option>)}</select></td>
-                  <td><select className="input" value={p.workspace || p.workspaces?.[0] || "frame"} onChange={e => saveProfile(p, p.role === "client" ? { workspace: e.target.value } : { workspaces: [e.target.value] })}>{clientOptions.map(id => <option key={id} value={id}>{clients[id]?.name || id}</option>)}</select></td>
+                  <td>
+                    {p.role === "client" ? (
+                      <select className="input" value={p.workspace || "frame"} onChange={e => saveProfile(p, { workspace: e.target.value })}>{clientOptions.map(id => <option key={id} value={id}>{clients[id]?.name || id}</option>)}</select>
+                    ) : (
+                      <input className="input" value={(p.workspaces || ["frame"]).join(", ")} onChange={e => saveProfile(p, { workspaces: parseWorkspaces(e.target.value) })} placeholder="frame, cliente-a" />
+                    )}
+                  </td>
                   <td className="t-cap" style={{ color: "rgba(0,0,0,.44)" }}>{p.created_at ? new Date(p.created_at).toLocaleDateString("es-ES") : "-"}</td>
                 </tr>
               ))}</tbody>
