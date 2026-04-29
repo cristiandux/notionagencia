@@ -284,6 +284,49 @@ $$;
 
 grant execute on function upsert_invitation(text, text, text, text[]) to authenticated;
 
+create or replace function create_client_workspace(
+  client_slug text,
+  client_name text,
+  client_sector text default '',
+  client_plan text default '',
+  client_mrr text default '',
+  client_rate integer default 0
+)
+returns clients
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  c clients;
+  clean_slug text;
+begin
+  if current_user_role() not in ('admin','socio') then
+    raise exception 'only admins and socios can create clients';
+  end if;
+
+  clean_slug := lower(trim(client_slug));
+  if clean_slug = '' or client_name is null or trim(client_name) = '' then
+    raise exception 'client slug and name are required';
+  end if;
+
+  insert into clients (slug, name, sector, plan, mrr, rate, emoji)
+  values (clean_slug, trim(client_name), coalesce(client_sector, ''), coalesce(client_plan, ''), coalesce(client_mrr, ''), coalesce(client_rate, 0), '○')
+  on conflict (slug) do update
+    set name = excluded.name,
+        sector = excluded.sector,
+        plan = excluded.plan,
+        mrr = excluded.mrr,
+        rate = excluded.rate,
+        updated_at = now()
+  returning * into c;
+
+  return c;
+end;
+$$;
+
+grant execute on function create_client_workspace(text, text, text, text, text, integer) to authenticated;
+
 -- INVITATIONS
 drop policy if exists "invitations_admin_all" on invitations;
 create policy "invitations_admin_all" on invitations for all

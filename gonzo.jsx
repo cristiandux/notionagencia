@@ -254,6 +254,17 @@ const dbClients = {
   },
   upsert: async (slug, patch) => {
     if (!DB_READY) return;
+    const { data: rpcData, error: rpcError } = await supabase.rpc("create_client_workspace", {
+      client_slug: slug,
+      client_name: patch.name || slug,
+      client_sector: patch.sector || "",
+      client_plan: patch.plan || "",
+      client_mrr: patch.mrr || "",
+      client_rate: Number(patch.rate) || 0,
+    });
+    if (!rpcError && rpcData) return fromDb(rpcData);
+    if (rpcError) console.error("create_client_workspace rpc:", rpcError);
+
     const { data, error } = await supabase.from("clients").upsert({ slug, ...toDb(patch) }).select().single();
     if (error) {
       console.error("client upsert:", error);
@@ -467,10 +478,9 @@ export default function GonzoApp() {
 
   const addClient = async (slug, data) => {
     const nc = { ...EMPTY_CLIENT(slug), ...data };
-    setClients(c => ({ ...c, [slug]: nc }));
     const saved = await dbClients.upsert(slug, nc);
     if (saved) setClients(c => ({ ...c, [slug]: saved }));
-    return saved || nc;
+    return saved;
   };
 
   // Time entries
