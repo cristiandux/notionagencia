@@ -1086,7 +1086,7 @@ function HomePage({ user, nav, clients, timeEntries, deals }) {
    CLIENTES LIST
 ════════════════════════════════════════════════════════════════════ */
 function ClientesPage({ nav, clients, user }) {
-  const ids = ["fabish", "dani", "bastida", "erik"];
+  const ids = Object.keys(clients).filter(k => k !== "frame");
   const isEd = user.role === "editor";
   return (
     <Shell>
@@ -1097,9 +1097,17 @@ function ClientesPage({ nav, clients, user }) {
           {isEd ? "Selecciona un cliente para descargar su material bruto." : "Cada marca, un acento distinto. Primero escucho; después grabo."}
         </p>
       </div>
+      {ids.length === 0 && (
+        <div className="card" style={{ padding: 40, textAlign: "center", background: "#f5f5f7" }}>
+          <Users size={28} style={{ marginBottom: 12, color: "rgba(0,0,0,.36)" }} />
+          <div className="t-body-em" style={{ marginBottom: 6 }}>Sin clientes todavia.</div>
+          <div className="t-cap" style={{ color: "rgba(0,0,0,.56)" }}>Crea clientes en Supabase o desde el flujo de alta para empezar a operar.</div>
+        </div>
+      )}
       <div className="grid-2">
         {ids.map((id) => {
           const c = clients[id];
+          if (!c) return null;
           return (
             <button key={id} onClick={() => nav("clientes", id)} className="card card-hov" style={{ background: "#f5f5f7", border: "none", padding: 0, fontFamily: "inherit", textAlign: "left", cursor: "pointer" }}>
               <div style={{ height: 176, background: c.cover, position: "relative" }}>
@@ -1796,6 +1804,27 @@ function ContentCalendar({ clients, updateClient }) {
   const [dragging, setDragging] = useState(null);
   const [editing, setEditing] = useState(null);
   const client = clients[active];
+
+  useEffect(() => {
+    if ((!active || !clients[active]) && ids[0]) setActive(ids[0]);
+  }, [active, ids.join("|"), clients]);
+
+  if (ids.length === 0 || !client) {
+    return (
+      <Shell>
+        <div style={{ marginBottom: 32 }}>
+          <div className="t-nano spaced-md" style={{ color: "rgba(0,0,0,.4)", marginBottom: 12 }}>PLANIFICACION</div>
+          <h1 className="t-display" style={{ marginBottom: 16 }}>Content Calendar.</h1>
+        </div>
+        <div className="card" style={{ padding: 40, textAlign: "center", background: "#f5f5f7" }}>
+          <Calendar size={28} style={{ marginBottom: 12, color: "rgba(0,0,0,.36)" }} />
+          <div className="t-body-em" style={{ marginBottom: 6 }}>No hay clientes disponibles.</div>
+          <div className="t-cap" style={{ color: "rgba(0,0,0,.56)" }}>Cuando haya al menos un cliente en Supabase, su calendario aparecera aqui.</div>
+        </div>
+      </Shell>
+    );
+  }
+
   const today = new Date(); const year = today.getFullYear(); const month = today.getMonth();
   const startWd = (new Date(year, month, 1).getDay() + 6) % 7;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -1942,9 +1971,14 @@ function InboxPage({ clients, updateClient }) {
   const [sel, setSel] = useState(all.find((c) => c.status === "pending") || all[0]);
   const [reply, setReply] = useState("");
   const [showTpl, setShowTpl] = useState(false);
+  useEffect(() => {
+    if (!sel || !all.some(c => c.id === sel.id)) {
+      setSel(all.find((c) => c.status === "pending") || all[0] || null);
+    }
+  }, [all, sel]);
   const filtered = all.filter((c) => filter === "all" ? true : c.status === filter);
   const counts = { pending: all.filter(c => c.status === "pending").length, answered: all.filter(c => c.status === "answered").length, spam: all.filter(c => c.status === "spam").length, all: all.length };
-  const updStatus = (cid, clientId, status) => { const c = clients[clientId]; updateClient(clientId, { comments: (c.comments || []).map((cm) => cm.id === cid ? { ...cm, status } : cm) }); if (sel?.id === cid) setSel({ ...sel, status }); };
+  const updStatus = (cid, clientId, status) => { const c = clients[clientId]; if (!c) return; updateClient(clientId, { comments: (c.comments || []).map((cm) => cm.id === cid ? { ...cm, status } : cm) }); if (sel?.id === cid) setSel({ ...sel, status }); };
   const send = () => { if (!reply.trim() || !sel) return; updStatus(sel.id, sel.clientId, "answered"); setReply(""); };
   const pc = { high: "#FF3B30", medium: "#FF9500", low: "rgba(0,0,0,.3)" };
   const tpls = sel ? (clients[sel.clientId]?.replyTemplates || []) : [];
@@ -2488,6 +2522,26 @@ function GoalsPage({ clients, timeEntries }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const c = clients[active];
+
+  useEffect(() => {
+    if ((!active || !clients[active]) && ids[0]) setActive(ids[0]);
+  }, [active, ids.join("|"), clients]);
+
+  if (ids.length === 0 || !c) {
+    return (
+      <Shell>
+        <div style={{ marginBottom: 32 }}>
+          <div className="t-nano spaced-md" style={{ color: "rgba(0,0,0,.4)", marginBottom: 12 }}>OBJETIVOS Y PROGRESO</div>
+          <h1 className="t-display" style={{ marginBottom: 16 }}>Goals & Reportes.</h1>
+        </div>
+        <div className="card" style={{ padding: 40, textAlign: "center", background: "#f5f5f7" }}>
+          <Award size={28} style={{ marginBottom: 12, color: "rgba(0,0,0,.36)" }} />
+          <div className="t-body-em" style={{ marginBottom: 6 }}>No hay clientes con objetivos.</div>
+          <div className="t-cap" style={{ color: "rgba(0,0,0,.56)" }}>Crea o sincroniza clientes para generar reportes.</div>
+        </div>
+      </Shell>
+    );
+  }
 
   const generate = async () => {
     setBusy(true); setErr(null); setReport(null);
