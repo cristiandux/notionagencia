@@ -888,7 +888,7 @@ function Workspace({ user, activeWs, onSwitchWs, onLogout, clients, updateClient
           <div className="fade-up" key={page + (cid || "") + activeWs}>
             {page === "home" && <HomePage user={user} nav={nav} clients={clients} timeEntries={timeEntries} deals={deals} />}
             {page === "clientes" && !cid && <ClientesPage nav={nav} clients={clients} user={user} addClient={addClient} />}
-            {page === "clientes" && cid && <ClientDetail clientId={cid} clients={clients} updateClient={updateClient} user={user} timeEntries={timeEntries} setTimeEntries={setTimeEntries} />}
+            {page === "clientes" && cid && <ClientDetail clientId={cid} clients={clients} updateClient={updateClient} user={user} timeEntries={timeEntries} addTimeEntry={addTimeEntry} removeTimeEntry={removeTimeEntry} />}
             {page === "calendar" && <ContentCalendar clients={clients} updateClient={updateClient} />}
             {page === "inbox" && <InboxPage clients={clients} updateClient={updateClient} />}
             {page === "crm" && <CRMPage deals={deals} upsertDeal={upsertDeal} removeDeal={removeDeal} moveDeal={moveDeal} nav={nav} />}
