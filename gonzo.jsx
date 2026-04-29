@@ -1197,12 +1197,14 @@ function ClientesPage({ nav, clients, user, addClient }) {
   const canCreate = user.role === "admin" || user.role === "socio";
   const [showNew, setShowNew] = useState(false);
   const [err, setErr] = useState("");
-  const [form, setForm] = useState({ name: "", slug: "", sector: "", plan: "Retainer", mrr: "", rate: 50 });
+  const [msg, setMsg] = useState("");
+  const [form, setForm] = useState({ name: "", slug: "", sector: "", plan: "Retainer", mrr: "", rate: 50, email: "" });
   const slugify = (value) => value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
   const setName = (name) => setForm(f => ({ ...f, name, slug: f.slug || slugify(name) }));
   const create = async (e) => {
     e?.preventDefault?.();
     setErr("");
+    setMsg("");
     const slug = slugify(form.slug || form.name);
     if (!slug || !form.name.trim()) { setErr("Nombre y slug son obligatorios."); return; }
     if (clients[slug]) { setErr("Ya existe un cliente con ese slug."); return; }
@@ -1217,8 +1219,30 @@ function ClientesPage({ nav, clients, user, addClient }) {
       tagline: "",
       });
       if (!saved) { setErr("No se pudo crear. Revisa permisos RLS de clients."); return; }
+
+      const email = form.email.trim().toLowerCase();
+      if (email) {
+        const invite = {
+          email,
+          role: "client",
+          workspace: saved.slug || slug,
+          workspaces: null,
+          invited_by: user.id,
+        };
+        const invited = await dbInvitations.upsert(invite);
+        if (invited) {
+          const existing = await dbUsers.getProfileByEmail(email);
+          if (existing && user.role === "admin") {
+            await dbUsers.update(existing.id, { role: "client", workspace: saved.slug || slug, workspaces: null });
+          }
+          setMsg(`Cliente creado e invitación preparada para ${email}.`);
+        } else {
+          setMsg("Cliente creado. No se pudo crear la invitación; revisa el SQL de invitations.");
+        }
+      }
+
       setShowNew(false);
-      setForm({ name: "", slug: "", sector: "", plan: "Retainer", mrr: "", rate: 50 });
+      setForm({ name: "", slug: "", sector: "", plan: "Retainer", mrr: "", rate: 50, email: "" });
       nav("clientes", saved.slug || slug);
     } catch (error) {
       console.error("client create:", error);
@@ -1239,12 +1263,14 @@ function ClientesPage({ nav, clients, user, addClient }) {
           <button onClick={() => setShowNew(v => !v)} className="btn btn-blue"><Plus size={14} />Nuevo cliente</button>
         </div>
       )}
+      {msg && <div className="card" style={{ padding: 16, marginBottom: 24, background: "#eef7ff", borderColor: "rgba(0,113,227,.18)", color: "#0a4ea1" }}>{msg}</div>}
       {showNew && (
         <form onSubmit={create} className="card" style={{ padding: 24, marginBottom: 32, background: "#f5f5f7" }}>
           <div className="t-body-em" style={{ marginBottom: 16 }}>Crear cliente / workspace</div>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(180px,1fr) minmax(160px,220px)", gap: 12, marginBottom: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(180px,1fr) minmax(160px,220px) minmax(220px,1fr)", gap: 12, marginBottom: 12 }}>
             <input className="input" value={form.name} onChange={e => setName(e.target.value)} placeholder="Nombre del cliente" autoFocus />
             <input className="input" value={form.slug} onChange={e => setForm(f => ({ ...f, slug: slugify(e.target.value) }))} placeholder="slug-workspace" />
+            <input className="input" type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="email@cliente.com" />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 140px 120px", gap: 12 }}>
             <input className="input" value={form.sector} onChange={e => setForm(f => ({ ...f, sector: e.target.value }))} placeholder="Sector" />
@@ -1253,6 +1279,7 @@ function ClientesPage({ nav, clients, user, addClient }) {
             <input className="input" type="number" value={form.rate} onChange={e => setForm(f => ({ ...f, rate: e.target.value }))} placeholder="€/h" />
           </div>
           {err && <div className="t-cap" style={{ color: "#FF3B30", marginTop: 12 }}>{err}</div>}
+          <div className="t-mic" style={{ marginTop: 10, color: "rgba(0,0,0,.48)" }}>Si escribes un email, se crea también la invitación de cliente para ese workspace.</div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
             <button type="button" onClick={() => setShowNew(false)} className="btn btn-ghost">Cancelar</button>
             <button type="submit" className="btn btn-blue"><Plus size={12} />Crear</button>
