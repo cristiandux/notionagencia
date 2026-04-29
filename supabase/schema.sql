@@ -17,6 +17,17 @@ create table if not exists profiles (
   updated_at timestamptz default now()
 );
 
+create table if not exists invitations (
+  email      text primary key,
+  role       text not null default 'client'
+               check (role in ('admin','socio','editor','client')),
+  workspaces text[] default array['frame'],
+  workspace  text default null,
+  invited_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
 -- Trigger: crea perfil automáticamente al registrar usuario
 create or replace function handle_new_user()
 returns trigger language plpgsql security definer as $$
@@ -42,9 +53,9 @@ create table if not exists clients (
   since           text default '',
   plan            text default '',
   mrr             text default '',
-  rate            integer default 0,           -- €/hora objetivo
+  rate            integer default 0,
   emoji           text default '📁',
-  voice           text default '',             -- voz de marca
+  voice           text default '',
   about           text default '',
   photos          jsonb default '[]',
   fonts           jsonb default '[]',
@@ -71,6 +82,11 @@ $$;
 
 create trigger clients_updated_at
   before update on clients
+  for each row execute procedure set_updated_at();
+
+drop trigger if exists invitations_updated_at on invitations;
+create trigger invitations_updated_at
+  before update on invitations
   for each row execute procedure set_updated_at();
 
 -- 3. TIME ENTRIES (registro de horas)
@@ -108,8 +124,8 @@ create trigger deals_updated_at
 -- ROW LEVEL SECURITY
 -- ══════════════════════════════════════════════════════════════════
 
--- Activar RLS en todas las tablas
 alter table profiles     enable row level security;
+alter table invitations  enable row level security;
 alter table clients      enable row level security;
 alter table time_entries enable row level security;
 alter table deals        enable row level security;
@@ -117,15 +133,117 @@ alter table deals        enable row level security;
 -- Helper: obtener rol del usuario actual
 create or replace function current_user_role()
 returns text language sql security definer stable as $$
-  select role from profiles where id = auth.uid()
+  select role
+  from profiles
+  where id = auth.uid()
+     or lower(email) = lower(auth.jwt()->>'email')
+  limit 1
 $$;
 
--- PROFILES: cada usuario ve su propio perfil; admin lo ve todo
+-- PROFILES
 create policy "profiles_self_read"   on profiles for select using (id = auth.uid());
-create policy "profiles_admin_all"   on profiles for all    using (current_user_role() = 'admin');
+create policy "profiles_self_insert" on profiles for insert with check (id = auth.uid());
 create policy "profiles_self_update" on profiles for update using (id = auth.uid());
+create policy "profiles_admin_all"   on profiles for all    using (current_user_role() = 'admin');
 
--- CLIENTS: admin y socio ven todos; editor ve todos; cliente ve solo el suyo
+drop policy if exists "profiles_self_email_read" on profiles;
+drop policy if exists "profiles_self_email_update" on profiles;
+
+create policy "profiles_self_email_read" on profiles for select
+  using (lower(email) = lower(auth.jwt()->>'email'));
+
+create policy "profiles_self_email_update" on profiles for update
+  using (lower(email) = lower(auth.jwt()->>'email'))
+  with check (lower(email) = lower(auth.jwt()->>'email'));
+
+-- RPC segura para asegurar que el usuario autenticado tenga perfil.
+-- Evita que el login dependa de inserts directos desde el cliente cuando RLS esta activo.
+create or replace function ensure_my_profile()
+returns profiles
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  p profiles;
+  inv invitations;
+  user_email text;
+  user_name text;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select email, coalesce(raw_user_meta_data->>'name', split_part(email, '@', 1))
+    into user_email, user_name
+  from auth.users
+  where id = auth.uid();
+
+  select * into inv
+  from invitations
+  where lower(email) = lower(user_email);
+
+  select * into p
+  from profiles
+  where id = auth.uid();
+
+  if p.id is not null then
+    return p;
+  end if;
+
+  select * into p
+  from profiles
+  where lower(email) = lower(user_email);
+
+  if p.id is not null then
+    update profiles
+    set id = auth.uid(),
+        email = user_email,
+        name = coalesce(nullif(profiles.name, ''), user_name),
+        role = coalesce(inv.role, profiles.role, 'client'),
+        workspaces = coalesce(inv.workspaces, profiles.workspaces, array['frame']),
+        workspace = coalesce(inv.workspace, profiles.workspace),
+        updated_at = now()
+    where lower(profiles.email) = lower(user_email)
+    returning * into p;
+
+    return p;
+  end if;
+
+  insert into profiles (id, email, name, role, workspaces)
+  values (
+    auth.uid(),
+    user_email,
+    user_name,
+    coalesce(inv.role, 'client'),
+    coalesce(inv.workspaces, array['frame'])
+  )
+  on conflict (id) do update
+    set email = excluded.email,
+        name = coalesce(nullif(profiles.name, ''), excluded.name),
+        role = coalesce(inv.role, profiles.role),
+        workspaces = coalesce(profiles.workspaces, excluded.workspaces),
+        workspace = coalesce(inv.workspace, profiles.workspace),
+        updated_at = now()
+  returning * into p;
+
+  return p;
+end;
+$$;
+
+grant execute on function ensure_my_profile() to authenticated;
+
+-- INVITATIONS
+drop policy if exists "invitations_admin_all" on invitations;
+create policy "invitations_admin_all" on invitations for all
+  using (current_user_role() = 'admin')
+  with check (current_user_role() = 'admin');
+
+drop policy if exists "invitations_self_read" on invitations;
+create policy "invitations_self_read" on invitations for select
+  using (lower(email) = lower(auth.jwt()->>'email'));
+
+-- CLIENTS
 create policy "clients_admin_socio_editor" on clients for select
   using (current_user_role() in ('admin','socio','editor'));
 
@@ -138,38 +256,24 @@ create policy "clients_client_own" on clients for select
 create policy "clients_admin_socio_write" on clients for all
   using (current_user_role() in ('admin','socio'));
 
--- TIME ENTRIES: solo admin, socio y editor
+-- TIME ENTRIES
 create policy "time_team_only" on time_entries for all
   using (current_user_role() in ('admin','socio','editor'));
 
--- DEALS: solo admin y socio
+-- DEALS
 create policy "deals_team_only" on deals for all
   using (current_user_role() in ('admin','socio'));
 
 -- ══════════════════════════════════════════════════════════════════
--- WORKSPACE INICIAL (frame = tu agencia)
--- Ejecuta esto una vez para crear el workspace principal
+-- WORKSPACE INICIAL
 -- ══════════════════════════════════════════════════════════════════
 insert into clients (slug, name, emoji, cover)
 values ('frame', 'gonzo · agencia', '○', 'linear-gradient(135deg,#0a1729,#1a3a6a)')
 on conflict (slug) do nothing;
 
 -- ══════════════════════════════════════════════════════════════════
--- NOTAS DE IMPLEMENTACIÓN
+-- PRIMER ADMIN
+-- 1. Regístrate con tu email en la app
+-- 2. Supabase → Table Editor → profiles → cambia role a 'admin'
+-- 3. Desde la UI puedes gestionar el resto de roles
 -- ══════════════════════════════════════════════════════════════════
--- 1. Para crear el primer admin:
---    a) Regístrate en la app con tu email
---    b) En Supabase → Table Editor → profiles → edita tu fila → role = 'admin'
---    c) A partir de ahí, el admin puede cambiar roles desde la UI
---
--- 2. Para añadir clientes desde la UI:
---    Admin → Clientes → "+ Añadir cliente"
---    Esto crea un registro en la tabla clients
---
--- 3. Para invitar a un cliente al portal:
---    Admin → Equipo → Invitar usuario → rol: client → workspace: [slug del cliente]
---    El cliente recibe un email de Supabase Auth con su enlace de acceso
---
--- 4. Storage para archivos (opcional, adicional a SwissTransfer):
---    Si quieres subir archivos directamente en lugar de SwissTransfer links:
---    Supabase → Storage → Create bucket "deliverables" (public) y "raw-files" (private)

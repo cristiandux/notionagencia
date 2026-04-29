@@ -1,3 +1,4 @@
+"use client";
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   Search, Plus, ChevronDown, ChevronRight, ChevronLeft, Home, Users,
@@ -13,6 +14,7 @@ import {
   AlignLeft, List as ListIcon, CheckSquare, Quote, Presentation,
   Briefcase, Award, ListChecks, Heading1, Heading2
 } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 
 const FONT = `-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif`;
 const SERIF = `"Cormorant Garamond", "Playfair Display", Georgia, serif`;
@@ -26,96 +28,229 @@ const SERIF = `"Cormorant Garamond", "Playfair Display", Georgia, serif`;
    3. Pégalas aquí. El RLS (Row Level Security) hará el resto.
    4. Ejecuta el schema SQL que está en /supabase/schema.sql
 ══════════════════════════════════════════════════════════════════ */
-const SUPABASE_URL = ""; // "https://vstbddrhxlunwmvghebu.supabase.co"
-const SUPABASE_ANON = ""; // "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzdGJkZHJoeGx1bndtdmdoZWJ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0NjQ4NTIsImV4cCI6MjA5MzA0MDg1Mn0.wogArRUzVSKOWNjb15W91AmzMxG7PAGE3n9ltd6ZbBs"
+// Inicialización dinámica de Supabase — se evalúa en runtime
+const getSupabaseConfig = () => {
+  const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+  const key = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
+  return { url, key, ready: Boolean(url && key) };
+};
 
-const DB_READY = Boolean(SUPABASE_URL && SUPABASE_ANON);
+let _supabaseClient = null;
+let _dbReady = false;
 
-/* ── Capa de acceso a datos ──────────────────────────────────────
-   Todas las funciones que tocan la DB están aquí.
-   Si DB_READY=false, operan en local (localStorage fallback).
-   Cuando conectes Supabase, solo cambia estas funciones.
-─────────────────────────────────────────────────────────────────── */
-const sb = (() => {
-  if (!DB_READY) return null;
-  // Supabase JS client (inyectado vía CDN en producción, stub aquí)
-  // En producción: import { createClient } from "@supabase/supabase-js"
-  // const supabase = createClient(SUPABASE_URL, SUPABASE_ANON)
-  return null;
-})();
+const initSupabaseOnce = () => {
+  if (_supabaseClient !== null) return; // Ya inicializado
+  const { url, key, ready } = getSupabaseConfig();
+  _dbReady = ready;
+  if (ready) {
+    _supabaseClient = createClient(url, key);
+    console.log("✓ Supabase conectado");
+  } else {
+    console.error("Supabase no está configurado. Revisa NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY en .env.local");
+  }
+};
+
+// Inicializa al cargar el módulo
+initSupabaseOnce();
+
+const supabase = _supabaseClient;
+const DB_READY = _dbReady;
 
 /* ── Auth ────────────────────────────────────────────────────────── */
 const dbAuth = {
-  // Devuelve { user } o { error }
+  // Intenta sign in; si falla, intenta sign up (auto-register)
   signIn: async (email, password) => {
     if (!DB_READY) {
-      // FALLBACK LOCAL: busca en DEMO_USERS (solo para desarrollo)
-      const u = DEMO_USERS.find(x => x.email.toLowerCase() === email.toLowerCase());
-      if (!u) return { error: "Usuario no encontrado." };
-      if (password !== "gonzo2025" && password !== u.demoPass) return { error: "Contraseña incorrecta." };
-      return { user: u };
+      return { error: "Supabase no está configurado. Revisa las variables de entorno." };
     }
-    // const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    // if (error) return { error: error.message };
-    // const profile = await dbUsers.getProfile(data.user.id);
-    // return { user: profile };
+    // Intenta sign in
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    if (!signInError) {
+      let profile = await dbUsers.ensureProfile();
+      if (!profile) profile = await dbUsers.getProfile(signInData.user.id);
+      if (!profile) profile = await dbUsers.getProfileByEmail(signInData.user.email);
+      // Si perfil no existe, retorna usuario temporal
+      if (!profile) {
+        profile = await dbUsers.upsert({
+          id: signInData.user.id,
+          email: signInData.user.email,
+          name: signInData.user.email.split("@")[0],
+          role: "client",
+          workspaces: ["frame"],
+        });
+      }
+      if (!profile) {
+        return { error: "Sesión creada, pero no se pudo leer o crear el perfil. Revisa las políticas RLS de profiles." };
+      }
+      return { user: profile };
+    }
+
+    // Si falla, intenta sign up
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { name: email.split("@")[0] } },
+    });
+    if (signUpError) return { error: signUpError.message };
+    if (!signUpData?.user) return { error: "Supabase no devolvió el usuario creado." };
+    if (!signUpData.session) {
+      return { error: "Registro creado. Revisa tu email para confirmar la cuenta antes de entrar." };
+    }
+
+    const created = await waitForProfile(signUpData.user.id) || await dbUsers.upsert({
+      id: signUpData.user.id,
+      email,
+      name: email.split("@")[0],
+      role: "client",
+      workspaces: ["frame"],
+    });
+    if (!created) {
+      const byEmail = await dbUsers.getProfileByEmail(email);
+      if (byEmail) return { user: byEmail };
+      return { error: "Usuario creado, pero no se pudo crear el perfil. Revisa el trigger handle_new_user y las políticas RLS de profiles." };
+    }
+    return { user: created };
   },
   signOut: async () => {
     if (!DB_READY) return;
-    // await supabase.auth.signOut();
+    await supabase.auth.signOut();
   },
   getSession: async () => {
     if (!DB_READY) return null;
-    // const { data } = await supabase.auth.getSession();
-    // if (!data.session) return null;
-    // return await dbUsers.getProfile(data.session.user.id);
+    const { data } = await supabase.auth.getSession();
+    if (!data.session) return null;
+    let profile = await dbUsers.getProfile(data.session.user.id);
+    if (!profile) {
+      profile = await dbUsers.upsert({
+        id: data.session.user.id,
+        email: data.session.user.email,
+        name: data.session.user.email.split("@")[0],
+        role: "client",
+        workspaces: ["frame"],
+      });
+    }
+    return profile;
   },
 };
 
 /* ── Usuarios / Perfiles ─────────────────────────────────────────── */
 const dbUsers = {
   getAll: async () => {
-    if (!DB_READY) return DEMO_USERS;
-    // const { data } = await supabase.from("profiles").select("*").order("name");
-    // return data || [];
+    if (!DB_READY) return [];
+    const { data } = await supabase.from("profiles").select("*").order("name");
+    return data || [];
   },
   getProfile: async (id) => {
-    if (!DB_READY) return DEMO_USERS.find(u => u.id === id) || null;
-    // const { data } = await supabase.from("profiles").select("*").eq("id", id).single();
-    // return data;
+    if (!DB_READY) return null;
+    const { data, error } = await supabase.from("profiles").select("*").eq("id", id).single();
+    if (error) return null; // Perfil no existe aún
+    return data;
+  },
+  getProfileByEmail: async (email) => {
+    if (!DB_READY || !email) return null;
+    const { data, error } = await supabase.from("profiles").select("*").ilike("email", email).single();
+    if (error) {
+      console.error("profile by email:", error);
+      return null;
+    }
+    return data;
+  },
+  ensureProfile: async () => {
+    if (!DB_READY) return null;
+    const { data, error } = await supabase.rpc("ensure_my_profile");
+    if (error) {
+      console.error("ensure_my_profile rpc:", error);
+      return null;
+    }
+    return data;
   },
   upsert: async (profile) => {
     if (!DB_READY) return profile;
-    // const { data } = await supabase.from("profiles").upsert(profile).select().single();
-    // return data;
+    const rpcData = await dbUsers.ensureProfile();
+    if (rpcData) return rpcData;
+
+    const { data, error } = await supabase.from("profiles").upsert(profile).select().single();
+    if (error) {
+      console.error("profile upsert:", error);
+      return null;
+    }
+    return data;
   },
   updateRole: async (id, role) => {
     if (!DB_READY) return;
-    // await supabase.from("profiles").update({ role }).eq("id", id);
+    await supabase.from("profiles").update({ role }).eq("id", id);
+  },
+  update: async (id, patch) => {
+    if (!DB_READY) return null;
+    const { data, error } = await supabase.from("profiles").update(patch).eq("id", id).select().single();
+    if (error) {
+      console.error("profile update:", error);
+      return null;
+    }
+    return data;
   },
 };
 
+const dbInvitations = {
+  getAll: async () => {
+    if (!DB_READY) return [];
+    const { data, error } = await supabase.from("invitations").select("*").order("created_at", { ascending: false });
+    if (error) {
+      console.error("invitations get:", error);
+      return [];
+    }
+    return data || [];
+  },
+  upsert: async (invite) => {
+    if (!DB_READY) return invite;
+    const { data, error } = await supabase.from("invitations").upsert(invite).select().single();
+    if (error) {
+      console.error("invitation upsert:", error);
+      return null;
+    }
+    return data;
+  },
+  delete: async (email) => {
+    if (!DB_READY) return;
+    const { error } = await supabase.from("invitations").delete().ilike("email", email);
+    if (error) console.error("invitation delete:", error);
+  },
+};
+
+const waitForProfile = async (id) => {
+  for (let i = 0; i < 5; i += 1) {
+    const profile = await dbUsers.getProfile(id);
+    if (profile) return profile;
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  return null;
+};
+
 /* ── Clientes (workspaces) ───────────────────────────────────────── */
+
+// Mapeo snake_case (DB) ↔ camelCase (app)
+const fromDb = (c) => !c ? c : { ...c, goalText: c.goal_text, rawFiles: c.raw_files, replyTemplates: c.reply_templates };
+const toDb = ({ goalText, rawFiles, replyTemplates, ...rest }) => ({ ...rest, goal_text: goalText, raw_files: rawFiles, reply_templates: replyTemplates });
+
 const dbClients = {
   getAll: async () => {
     if (!DB_READY) return {};
-    // const { data } = await supabase.from("clients").select("*");
-    // return Object.fromEntries((data||[]).map(c => [c.slug, c]));
+    const { data } = await supabase.from("clients").select("*");
+    return Object.fromEntries((data || []).map(c => [c.slug, fromDb(c)]));
   },
   get: async (slug) => {
     if (!DB_READY) return EMPTY_CLIENT(slug);
-    // const { data } = await supabase.from("clients").select("*").eq("slug", slug).single();
-    // return data;
+    const { data } = await supabase.from("clients").select("*").eq("slug", slug).single();
+    return fromDb(data);
   },
   upsert: async (slug, patch) => {
     if (!DB_READY) return;
-    // await supabase.from("clients").upsert({ slug, ...patch });
+    await supabase.from("clients").upsert({ slug, ...toDb(patch) });
   },
-  // Subdocumentos como JSONB en Supabase o tablas separadas:
-  // deliverables, raw_files, posts, comments, reply_templates, chat, goals
   updateField: async (slug, field, value) => {
     if (!DB_READY) return;
-    // await supabase.from("clients").update({ [field]: value }).eq("slug", slug);
+    const dbField = { goalText: "goal_text", rawFiles: "raw_files", replyTemplates: "reply_templates" }[field] || field;
+    await supabase.from("clients").update({ [dbField]: value }).eq("slug", slug);
   },
 };
 
@@ -123,17 +258,17 @@ const dbClients = {
 const dbTime = {
   getAll: async () => {
     if (!DB_READY) return [];
-    // const { data } = await supabase.from("time_entries").select("*").order("created_at", { ascending: false });
-    // return data || [];
+    const { data } = await supabase.from("time_entries").select("*").order("created_at", { ascending: false });
+    return data || [];
   },
   insert: async (entry) => {
     if (!DB_READY) return entry;
-    // const { data } = await supabase.from("time_entries").insert(entry).select().single();
-    // return data;
+    const { data } = await supabase.from("time_entries").insert(entry).select().single();
+    return data;
   },
   delete: async (id) => {
     if (!DB_READY) return;
-    // await supabase.from("time_entries").delete().eq("id", id);
+    await supabase.from("time_entries").delete().eq("id", id);
   },
 };
 
@@ -141,21 +276,21 @@ const dbTime = {
 const dbDeals = {
   getAll: async () => {
     if (!DB_READY) return [];
-    // const { data } = await supabase.from("deals").select("*").order("created_at", { ascending: false });
-    // return data || [];
+    const { data } = await supabase.from("deals").select("*").order("created_at", { ascending: false });
+    return data || [];
   },
   upsert: async (deal) => {
     if (!DB_READY) return deal;
-    // const { data } = await supabase.from("deals").upsert(deal).select().single();
-    // return data;
+    const { data } = await supabase.from("deals").upsert(deal).select().single();
+    return data;
   },
   delete: async (id) => {
     if (!DB_READY) return;
-    // await supabase.from("deals").delete().eq("id", id);
+    await supabase.from("deals").delete().eq("id", id);
   },
   updateStage: async (id, stage) => {
     if (!DB_READY) return;
-    // await supabase.from("deals").update({ stage }).eq("id", id);
+    await supabase.from("deals").update({ stage }).eq("id", id);
   },
 };
 
@@ -199,21 +334,16 @@ const getQuote = () => {
 };
 
 /* ══════════════════════════════════════════════════════════════════
-   USUARIOS DEMO (solo activos si DB_READY = false)
+   USUARIOS DE PRUEBA RETIRADOS
    En producción estos datos viven en Supabase → tabla "profiles"
 ══════════════════════════════════════════════════════════════════ */
-const DEMO_USERS = [
-  { id: "u1", email: "cristian@gonzo.es", name: "Cristian", role: "admin", workspaces: ["frame"], demoPass: "admin" },
-  { id: "u2", email: "socio@gonzo.es", name: "Pau", role: "socio", workspaces: ["frame"], demoPass: "admin" },
-  { id: "u3", email: "editor@gonzo.es", name: "Mar", role: "editor", workspaces: ["frame"], demoPass: "admin" },
-];
-
 /* ══════════════════════════════════════════════════════════════════
    WORKSPACES (cargados desde DB en producción)
 ══════════════════════════════════════════════════════════════════ */
 const DEFAULT_WORKSPACES = {
   frame: { name: "gonzo · agencia", subtitle: "Workspace principal" },
 };
+const WORKSPACES = DEFAULT_WORKSPACES;
 
 /* ══════════════════════════════════════════════════════════════════
    CLIENTE VACÍO — plantilla base para nuevos clientes
@@ -280,14 +410,6 @@ export default function GonzoApp() {
         if (DB_READY) {
           const u = await dbAuth.getSession();
           if (u) { await loadUserData(u); return; }
-        } else {
-          // Modo demo: sesión local
-          const s = await window.storage?.get?.("session:current");
-          if (s?.value) {
-            const sess = JSON.parse(s.value);
-            const u = DEMO_USERS.find(x => x.id === sess.userId);
-            if (u) { await loadUserData(u); return; }
-          }
         }
       } catch (e) { console.error("session:", e); }
       setBooting(false);
@@ -311,15 +433,11 @@ export default function GonzoApp() {
   };
 
   const onLogin = async (u) => {
-    if (!DB_READY) {
-      try { await window.storage?.set?.("session:current", JSON.stringify({ userId: u.id })); } catch { }
-    }
     await loadUserData(u);
   };
 
   const onLogout = async () => {
     await dbAuth.signOut();
-    if (!DB_READY) { try { await window.storage?.delete?.("session:current"); } catch { } }
     setUser(null); setActiveWs(null);
     setClients(CLIENTS0); setTimeEntries(TIME0); setDeals(DEALS0);
   };
@@ -371,14 +489,9 @@ export default function GonzoApp() {
         <div style={{ height: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#0a1729", gap: 20 }}>
           <div className="serif" style={{ fontSize: 48, color: "#fff", letterSpacing: "0.02em" }}>gonzo</div>
           <Loader2 size={22} className="spin" style={{ color: "#88b0e0" }} />
-          {!DB_READY && (
-            <div style={{ position: "absolute", bottom: 32, left: "50%", transform: "translateX(-50%)" }}>
-              <DBSetupBanner />
-            </div>
-          )}
         </div>
       ) : !user ? (
-        <Login onLogin={onLogin} dbReady={DB_READY} />
+        <Login onLogin={onLogin} />
       ) : (
         <>
           <Workspace
@@ -396,14 +509,14 @@ export default function GonzoApp() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   BANNER: modo demo sin DB conectada
+   BANNER: configuración de base de datos
 ══════════════════════════════════════════════════════════════════ */
 function DBSetupBanner() {
   const [open, setOpen] = useState(false);
   return (
     <div style={{ background: "rgba(255,149,0,0.12)", border: "1px solid rgba(255,149,0,0.3)", borderRadius: 12, padding: "12px 20px", maxWidth: 480, textAlign: "center" }}>
       <div className="t-cap-b" style={{ color: "#FF9500", marginBottom: 4 }}>
-        ⚡ Modo demo — sin base de datos
+        Base de datos no configurada
       </div>
       <div className="t-mic" style={{ color: "rgba(255,255,255,0.7)", marginBottom: 8 }}>
         Los datos no se guardan entre sesiones. Conecta Supabase para activar la persistencia real.
@@ -664,7 +777,7 @@ function GS_earch({ onClose, clients, deals }) {
 }
 
 /* ─── LOGIN ─────────────────────────────────────────────────────── */
-function Login({ onLogin, dbReady }) {
+function Login({ onLogin }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState(null);
@@ -679,13 +792,6 @@ function Login({ onLogin, dbReady }) {
     onLogin(user);
   };
 
-  const qk = (u) => {
-    setEmail(u.email); setPw("gonzo2025");
-    setTimeout(() => onLogin(u), 200);
-  };
-
-  const rc = { admin: "#FFD700", socio: "#88b0e0", editor: "#a78bfa", client: "#34c759" };
-  const isDemoMode = !dbReady;
   return (
     <div className="gonzo halo-bg" style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "28px 40px", display: "flex", justifyContent: "space-between" }}>
@@ -695,7 +801,7 @@ function Login({ onLogin, dbReady }) {
         <div style={{ width: "100%", maxWidth: 440 }} className="fade-up">
           <div className="t-nano spaced-lg float" style={{ color: "#88b0e0", marginBottom: 32, textAlign: "center" }}>B · A · R · C · E · L · O · N · A</div>
           <h1 className="serif" style={{ fontSize: 64, lineHeight: 0.95, fontWeight: 400, color: "#fff", textAlign: "center", marginBottom: 8 }}>gonzo</h1>
-          <div className="t-cap spaced-md" style={{ color: "rgba(255,255,255,.56)", textAlign: "center", marginBottom: 48 }}>{isDemoMode ? "demo · sin DB" : "workspace · v.03"}</div>
+          <div className="t-cap spaced-md" style={{ color: "rgba(255,255,255,.56)", textAlign: "center", marginBottom: 48 }}>workspace · v.03</div>
           <form onSubmit={submit} style={{ background: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.1)", padding: 28, borderRadius: 24 }}>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="tu@email.com" className="input-dark" autoFocus style={{ marginBottom: 12 }} />
             <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="contraseña" className="input-dark" style={{ marginBottom: 16 }} />
@@ -703,22 +809,6 @@ function Login({ onLogin, dbReady }) {
             <button type="submit" disabled={!email || !pw || busy} className="pill" style={{ width: "100%", justifyContent: "center", background: "#fff", color: "#0a1729", borderColor: "#fff" }}>
               {busy ? <><Loader2 size={14} className="spin" />Entrando…</> : <>Continuar<ArrowRight size={16} /></>}
             </button>
-            <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid rgba(255,255,255,.08)" }}>
-              <div className="t-nano spaced-md" style={{ color: "rgba(255,255,255,.36)", marginBottom: 12 }}>Acceso rápido</div>
-              <div style={{ display: "grid", gap: 6 }}>
-                {DEMO_USERS.map((u) => (
-                  <button key={u.id} type="button" onClick={() => qk(u)}
-                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 10, background: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.06)", color: "#fff", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}>
-                    <div style={{ width: 8, height: 8, borderRadius: 999, background: rc[u.role], flexShrink: 0 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className="t-cap-b">{u.name}</div>
-                      <div className="t-mic" style={{ color: "rgba(255,255,255,.5)" }}>{u.email}</div>
-                    </div>
-                    <span className="t-nano" style={{ color: "rgba(255,255,255,.5)" }}>{u.role}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
           </form>
         </div>
       </div>
@@ -741,6 +831,16 @@ function Workspace({ user, activeWs, onSwitchWs, onLogout, clients, updateClient
 
   if (user.role === "client") {
     const cd = clients[user.workspace];
+    if (!cd) return (
+      <div className="gonzo" style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#0a1729", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ color: "#fff", textAlign: "center", padding: 40 }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>⚠</div>
+          <div style={{ fontSize: 20, marginBottom: 8 }}>Sin workspace asignado</div>
+          <div style={{ color: "rgba(255,255,255,.5)", marginBottom: 24 }}>Contacta con el administrador para acceder.</div>
+          <button onClick={onLogout} style={{ padding: "10px 24px", borderRadius: 8, background: "#fff", color: "#0a1729", border: "none", cursor: "pointer" }}>Cerrar sesión</button>
+        </div>
+      </div>
+    );
     return (
       <div className="gonzo" style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#fff" }}>
         <ClientTopbar user={user} onLogout={onLogout} clientName={cd.name} />
@@ -780,6 +880,7 @@ function Workspace({ user, activeWs, onSwitchWs, onLogout, clients, updateClient
             {page === "goals" && <GoalsPage clients={clients} timeEntries={timeEntries} />}
             {page === "templates" && <TemplatesPage />}
             {page === "ideas" && <IdeasPage />}
+            {page === "users" && user.role === "admin" && <UsersPage clients={clients} currentUser={user} />}
           </div>
         </main>
       </div>
@@ -796,8 +897,6 @@ function Sidebar({ user, page, cid, nav, exp, toggleSec, open, onLogout, ws, onS
   const wsData = { ...DEFAULT_WORKSPACES, ...Object.fromEntries(Object.keys(clients).filter(k => k !== 'frame').map(k => [k, { name: clients[k]?.name || k, subtitle: 'Cliente' }])) }[ws] || DEFAULT_WORKSPACES.frame;
   const isEd = user.role === "editor";
   const rc = { admin: "#FFD700", socio: "#88b0e0", editor: "#a78bfa", client: "#34c759" };
-  const isDemoMode = !dbReady;
-
   const Item = ({ icon, label, active, onClick, indent = 0, right, caret }) => (
     <button onClick={onClick} className={`side-item ${active ? "active" : ""}`} style={{ paddingLeft: 10 + indent * 14 }}>
       {caret !== undefined && <span style={{ color: "rgba(0,0,0,.4)", width: 10, display: "inline-flex" }}>{caret ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>}
@@ -849,6 +948,7 @@ function Sidebar({ user, page, cid, nav, exp, toggleSec, open, onLogout, ws, onS
             <Item icon={<Award size={14} />} label="Goals & Reportes" active={page === "goals"} onClick={() => nav("goals")} />
             <Item icon={<Layers size={14} />} label="Plantillas" active={page === "templates"} onClick={() => nav("templates")} />
             <Item icon={<Lightbulb size={14} />} label="Ideas & Referencias" active={page === "ideas"} onClick={() => nav("ideas")} />
+            {user.role === "admin" && <Item icon={<Shield size={14} />} label="Usuarios y roles" active={page === "users"} onClick={() => nav("users")} />}
           </>
         )}
       </div>
@@ -869,7 +969,7 @@ function Sidebar({ user, page, cid, nav, exp, toggleSec, open, onLogout, ws, onS
 
 /* ─── TOPBAR ────────────────────────────────────────────────────── */
 function Topbar({ page, cid, nav, onMenu, onSearch }) {
-  const map = { home: "Inicio", calendar: "Content Calendar", inbox: "Inbox unificado", crm: "CRM · Leads", time: "Time tracking", goals: "Goals & Reportes", templates: "Plantillas", ideas: "Ideas" };
+  const map = { home: "Inicio", calendar: "Content Calendar", inbox: "Inbox unificado", crm: "CRM · Leads", time: "Time tracking", goals: "Goals & Reportes", templates: "Plantillas", ideas: "Ideas", users: "Usuarios y roles" };
   const trail = () => {
     if (map[page]) return [map[page]];
     if (page === "clientes") {
@@ -1462,7 +1562,7 @@ function DeliverablesTab({ data, upd, canEdit }) {
               {/* Editar / borrar */}
               {canEdit && (
                 <div style={{
-                  display: "flex", gap: 4" }}>
+                  display: "flex", gap: 4 }}>
                     <button onClick = { ()=> setEditId(isOpen?null: d.id)} style={{ padding: 6, borderRadius: 6, background: "transparent", border: "none", cursor: "pointer", color: "rgba(0,0,0,.4)" }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
             </button>
@@ -2497,6 +2597,119 @@ function GoalsPage({ clients, timeEntries }) {
 /* ════════════════════════════════════════════════════════════════════
    TEMPLATES
 ════════════════════════════════════════════════════════════════════ */
+function UsersPage({ clients, currentUser }) {
+  const [profiles, setProfiles] = useState([]);
+  const [invites, setInvites] = useState([]);
+  const [busy, setBusy] = useState(true);
+  const [msg, setMsg] = useState("");
+  const [form, setForm] = useState({ email: "", role: "client", workspace: "frame" });
+  const clientOptions = ["frame", ...Object.keys(clients).filter(k => k !== "frame")];
+  const roles = ["admin", "socio", "editor", "client"];
+
+  const load = async () => {
+    setBusy(true);
+    const [u, i] = await Promise.all([dbUsers.getAll(), dbInvitations.getAll()]);
+    setProfiles(u);
+    setInvites(i);
+    setBusy(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const saveProfile = async (p, patch) => {
+    const next = { ...p, ...patch };
+    if (next.role === "client") {
+      next.workspace = next.workspace || "frame";
+      next.workspaces = null;
+    } else {
+      next.workspace = null;
+      next.workspaces = next.workspaces?.length ? next.workspaces : ["frame"];
+    }
+    setProfiles(list => list.map(x => x.id === p.id ? next : x));
+    const saved = await dbUsers.update(p.id, { role: next.role, workspace: next.workspace, workspaces: next.workspaces });
+    if (!saved) setMsg("No se pudo guardar el perfil. Revisa RLS de profiles.");
+  };
+
+  const createInvite = async (e) => {
+    e?.preventDefault?.();
+    const email = form.email.trim().toLowerCase();
+    if (!email) return;
+    const invite = {
+      email,
+      role: form.role,
+      workspace: form.role === "client" ? form.workspace : null,
+      workspaces: form.role === "client" ? null : [form.workspace || "frame"],
+      invited_by: currentUser.id,
+    };
+    const saved = await dbInvitations.upsert(invite);
+    if (!saved) {
+      setMsg("No se pudo crear la invitación. Aplica el SQL de invitations en Supabase.");
+      return;
+    }
+    setForm({ email: "", role: "client", workspace: "frame" });
+    setMsg("Invitación guardada. Cuando ese email se registre, recibirá su rol automáticamente.");
+    await load();
+  };
+
+  const removeInvite = async (email) => {
+    await dbInvitations.delete(email);
+    setInvites(list => list.filter(i => i.email !== email));
+  };
+
+  return (
+    <Shell>
+      <div style={{ marginBottom: 32 }}>
+        <div className="t-nano spaced-md" style={{ color: "rgba(0,0,0,.4)", marginBottom: 12 }}>ADMIN</div>
+        <h1 className="t-display" style={{ marginBottom: 16 }}>Usuarios y roles.</h1>
+        <p className="t-subnav" style={{ color: "rgba(0,0,0,.72)", maxWidth: 760 }}>Los usuarios se registran con Supabase Auth. Desde aquí asignas rol y workspace; para usuarios nuevos, crea una invitación por email.</p>
+      </div>
+      {msg && <div className="card" style={{ padding: 16, marginBottom: 24, background: "#fff7e6", borderColor: "rgba(255,149,0,.24)", color: "#8a5a00" }}>{msg}</div>}
+      <form onSubmit={createInvite} className="card" style={{ padding: 24, marginBottom: 32 }}>
+        <div className="t-body-em" style={{ marginBottom: 16 }}>Invitar o preasignar acceso</div>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) 150px 180px auto", gap: 12, alignItems: "center" }}>
+          <input className="input" type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="email@dominio.com" />
+          <select className="input" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}>{roles.map(r => <option key={r} value={r}>{r}</option>)}</select>
+          <select className="input" value={form.workspace} onChange={e => setForm(f => ({ ...f, workspace: e.target.value }))}>{clientOptions.map(id => <option key={id} value={id}>{clients[id]?.name || id}</option>)}</select>
+          <button className="btn btn-primary" type="submit"><UserPlus size={14} />Guardar</button>
+        </div>
+      </form>
+      <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 32 }}>
+        <div style={{ padding: 20, borderBottom: "1px solid rgba(0,0,0,.06)", display: "flex", justifyContent: "space-between" }}>
+          <div className="t-body-em">Perfiles registrados</div>
+          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14} />Actualizar</button>
+        </div>
+        {busy ? <div style={{ padding: 24 }}><Loader2 size={16} className="spin" /></div> : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+              <thead><tr style={{ textAlign: "left", color: "rgba(0,0,0,.44)" }}><th style={{ padding: 16 }}>Email</th><th>Nombre</th><th>Rol</th><th>Workspace</th><th>Creado</th></tr></thead>
+              <tbody>{profiles.map(p => (
+                <tr key={p.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
+                  <td style={{ padding: 16 }}>{p.email}</td>
+                  <td>{p.name}</td>
+                  <td><select className="input" value={p.role || "client"} onChange={e => saveProfile(p, { role: e.target.value })}>{roles.map(r => <option key={r} value={r}>{r}</option>)}</select></td>
+                  <td><select className="input" value={p.workspace || p.workspaces?.[0] || "frame"} onChange={e => saveProfile(p, p.role === "client" ? { workspace: e.target.value } : { workspaces: [e.target.value] })}>{clientOptions.map(id => <option key={id} value={id}>{clients[id]?.name || id}</option>)}</select></td>
+                  <td className="t-cap" style={{ color: "rgba(0,0,0,.44)" }}>{p.created_at ? new Date(p.created_at).toLocaleDateString("es-ES") : "-"}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ padding: 20, borderBottom: "1px solid rgba(0,0,0,.06)" }} className="t-body-em">Invitaciones pendientes</div>
+        {invites.length === 0 ? <div style={{ padding: 24, color: "rgba(0,0,0,.56)" }}>No hay invitaciones pendientes.</div> : invites.map(i => (
+          <div key={i.email} style={{ padding: 16, borderTop: "1px solid rgba(0,0,0,.06)", display: "grid", gridTemplateColumns: "1fr 120px 1fr auto", gap: 12, alignItems: "center" }}>
+            <div>{i.email}</div>
+            <div className="role-pill" style={{ background: "#f5f5f7" }}>{i.role}</div>
+            <div className="t-cap" style={{ color: "rgba(0,0,0,.56)" }}>{i.workspace || i.workspaces?.join(", ") || "frame"}</div>
+            <button className="btn btn-ghost" onClick={() => removeInvite(i.email)}><Trash2 size={14} /></button>
+          </div>
+        ))}
+      </div>
+    </Shell>
+  );
+}
+
 function TemplatesPage() {
   const templates = [
     { icon: <Users size={20} />, name: "Onboarding cliente nuevo", desc: "7 días: descubrimiento, contratos, primer rodaje.", cat: "Cliente", uses: 4 },
