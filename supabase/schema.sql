@@ -80,6 +80,7 @@ returns trigger language plpgsql as $$
 begin new.updated_at = now(); return new; end;
 $$;
 
+drop trigger if exists clients_updated_at on clients;
 create trigger clients_updated_at
   before update on clients
   for each row execute procedure set_updated_at();
@@ -116,6 +117,7 @@ create table if not exists deals (
   updated_at  timestamptz default now()
 );
 
+drop trigger if exists deals_updated_at on deals;
 create trigger deals_updated_at
   before update on deals
   for each row execute procedure set_updated_at();
@@ -141,6 +143,11 @@ returns text language sql security definer stable as $$
 $$;
 
 -- PROFILES
+drop policy if exists "profiles_self_read" on profiles;
+drop policy if exists "profiles_self_insert" on profiles;
+drop policy if exists "profiles_self_update" on profiles;
+drop policy if exists "profiles_admin_all" on profiles;
+
 create policy "profiles_self_read"   on profiles for select using (id = auth.uid());
 create policy "profiles_self_insert" on profiles for insert with check (id = auth.uid());
 create policy "profiles_self_update" on profiles for update using (id = auth.uid());
@@ -244,6 +251,10 @@ create policy "invitations_self_read" on invitations for select
   using (lower(email) = lower(auth.jwt()->>'email'));
 
 -- CLIENTS
+drop policy if exists "clients_admin_socio_editor" on clients;
+drop policy if exists "clients_client_own" on clients;
+drop policy if exists "clients_admin_socio_write" on clients;
+
 create policy "clients_admin_socio_editor" on clients for select
   using (current_user_role() in ('admin','socio','editor'));
 
@@ -257,10 +268,14 @@ create policy "clients_admin_socio_write" on clients for all
   using (current_user_role() in ('admin','socio'));
 
 -- TIME ENTRIES
+drop policy if exists "time_team_only" on time_entries;
+
 create policy "time_team_only" on time_entries for all
   using (current_user_role() in ('admin','socio','editor'));
 
 -- DEALS
+drop policy if exists "deals_team_only" on deals;
+
 create policy "deals_team_only" on deals for all
   using (current_user_role() in ('admin','socio'));
 
