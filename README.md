@@ -14,6 +14,7 @@ Crea `.env.local` a partir de `.env.example`:
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=tu-anon-key
+SUPABASE_SERVICE_ROLE_KEY=tu-service-role-key
 ```
 
 ## Supabase
@@ -40,5 +41,8 @@ En Vercel o el proveedor elegido, configura estas variables:
 
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
 
 No subas `.env.local`; ya esta ignorado por Git.
+
+Las invitaciones de cliente se envian desde el servidor usando la clave de servicio de Supabase. Si el email no sale, revisa tambien la configuracion de correo de Supabase Auth en tu proyecto.

@@ -230,6 +230,28 @@ const dbInvitations = {
     }
     return data || [];
   },
+  send: async (invite) => {
+    if (!invite?.email) return null;
+    try {
+      const response = await fetch("/api/invitations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(invite),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        console.error("invite send:", data?.error || response.statusText);
+        return null;
+      }
+      if (data?.auth_warning) {
+        console.warn("auth invite warning:", data.auth_warning);
+      }
+      return data;
+    } catch (error) {
+      console.error("invite send:", error);
+      return null;
+    }
+  },
   upsert: async (invite) => {
     if (!DB_READY) return invite;
     const { data: rpcData, error: rpcError } = await supabase.rpc("upsert_invitation", {
@@ -1230,7 +1252,7 @@ function ClientesPage({ nav, clients, user, addClient }) {
           workspaces: null,
           invited_by: user.id,
         };
-        const invited = await dbInvitations.upsert(invite);
+        const invited = await dbInvitations.send(invite);
         if (invited) {
           const existing = await dbUsers.getProfileByEmail(email);
           if (existing && user.role === "admin") {
@@ -1238,7 +1260,7 @@ function ClientesPage({ nav, clients, user, addClient }) {
           }
           setMsg(`Cliente creado e invitación preparada para ${email}.`);
         } else {
-          setMsg("Cliente creado. No se pudo crear la invitación; revisa el SQL de invitations.");
+          setMsg("Cliente creado. No se pudo enviar la invitación; revisa SUPABASE_SERVICE_ROLE_KEY y el correo de Supabase.");
         }
       }
 
@@ -2896,13 +2918,13 @@ function UsersPage({ clients, currentUser }) {
       workspaces: access.workspaces,
       invited_by: currentUser.id,
     };
-    const saved = await dbInvitations.upsert(invite);
+    const saved = await dbInvitations.send(invite);
     if (!saved) {
-      setMsg("No se pudo crear la invitación. Aplica el SQL de invitations en Supabase.");
+      setMsg("No se pudo enviar la invitación. Revisa SUPABASE_SERVICE_ROLE_KEY y la configuración de correo de Supabase.");
       return;
     }
     setForm({ email: "", role: "client", workspace: "frame", workspacesText: "frame" });
-    setMsg("Invitación guardada. Cuando ese email se registre, recibirá su rol automáticamente.");
+    setMsg("Invitación enviada y guardada. Cuando ese email acepte el correo, recibirá su rol automáticamente.");
     await load();
   };
 
