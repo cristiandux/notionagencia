@@ -1000,6 +1000,7 @@ function Sidebar({ user, page, cid, nav, exp, toggleSec, open, onLogout, ws, onS
   const clientList = Object.keys(clients)
     .filter(k => k !== "frame")
     .map(k => ({ id: k, name: clients[k]?.name || k, color: "#0a1729" }));
+  const inboxCount = Object.values(clients).flatMap((c) => c.comments || []).filter((c) => c.status === "pending").length;
   const wsData = { ...DEFAULT_WORKSPACES, ...Object.fromEntries(Object.keys(clients).filter(k => k !== 'frame').map(k => [k, { name: clients[k]?.name || k, subtitle: 'Cliente' }])) }[ws] || DEFAULT_WORKSPACES.frame;
   const isEd = user.role === "editor";
   const rc = { admin: "#FFD700", socio: "#88b0e0", editor: "#a78bfa", client: "#34c759" };
@@ -1048,7 +1049,7 @@ function Sidebar({ user, page, cid, nav, exp, toggleSec, open, onLogout, ws, onS
         {!isEd && (
           <>
             <Item icon={<Calendar size={14} />} label="Content Calendar" active={page === "calendar"} onClick={() => nav("calendar")} />
-            <Item icon={<Inbox size={14} />} label="Inbox unificado" active={page === "inbox"} onClick={() => nav("inbox")} right={<span className="t-mic-b" style={{ background: "#0071e3", color: "#fff", padding: "0 6px", borderRadius: 999 }}>4</span>} />
+            <Item icon={<Inbox size={14} />} label="Inbox unificado" active={page === "inbox"} onClick={() => nav("inbox")} right={<span className="t-mic-b" style={{ background: inboxCount > 0 ? "#0071e3" : "rgba(0,0,0,.08)", color: inboxCount > 0 ? "#fff" : "rgba(0,0,0,.4)", padding: "0 6px", borderRadius: 999 }}>{inboxCount}</span>} />
             <Item icon={<Briefcase size={14} />} label="CRM · Leads" active={page === "crm"} onClick={() => nav("crm")} />
             <Item icon={<Clock size={14} />} label="Time tracking" active={page === "time"} onClick={() => nav("time")} />
             <Item icon={<Award size={14} />} label="Goals & Reportes" active={page === "goals"} onClick={() => nav("goals")} />
