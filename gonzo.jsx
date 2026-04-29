@@ -238,7 +238,29 @@ const waitForProfile = async (id) => {
 /* ── Clientes (workspaces) ───────────────────────────────────────── */
 
 // Mapeo snake_case (DB) ↔ camelCase (app)
-const fromDb = (c) => !c ? c : { ...c, goalText: c.goal_text, rawFiles: c.raw_files, replyTemplates: c.reply_templates };
+const fromDb = (c) => {
+  if (!c) return c;
+  const base = EMPTY_CLIENT(c.slug || "");
+  const arrayFields = ["photos", "fonts", "palette", "goals", "growth", "deliverables", "chat", "posts", "comments", "contact"];
+  const normalized = {
+    ...base,
+    ...c,
+    slug: c.slug || base.slug,
+    name: c.name || base.name,
+    cover: c.cover || base.cover,
+    emoji: c.emoji || base.emoji,
+    goalText: c.goal_text ?? c.goalText ?? base.goalText,
+    rawFiles: c.raw_files ?? c.rawFiles ?? base.rawFiles,
+    replyTemplates: c.reply_templates ?? c.replyTemplates ?? base.replyTemplates,
+    rate: Number(c.rate ?? base.rate) || 0,
+  };
+  arrayFields.forEach((field) => {
+    if (!Array.isArray(normalized[field])) normalized[field] = base[field];
+  });
+  if (!Array.isArray(normalized.rawFiles)) normalized.rawFiles = base.rawFiles;
+  if (!Array.isArray(normalized.replyTemplates)) normalized.replyTemplates = base.replyTemplates;
+  return normalized;
+};
 const toDb = ({ goalText, rawFiles, replyTemplates, ...rest }) => ({ ...rest, goal_text: goalText, raw_files: rawFiles, reply_templates: replyTemplates });
 
 const dbClients = {
@@ -1126,7 +1148,8 @@ function ClientesPage({ nav, clients, user, addClient }) {
     const slug = slugify(form.slug || form.name);
     if (!slug || !form.name.trim()) { setErr("Nombre y slug son obligatorios."); return; }
     if (clients[slug]) { setErr("Ya existe un cliente con ese slug."); return; }
-    const saved = await addClient(slug, {
+    try {
+      const saved = await addClient(slug, {
       name: form.name.trim(),
       sector: form.sector.trim(),
       plan: form.plan.trim(),
@@ -1134,11 +1157,15 @@ function ClientesPage({ nav, clients, user, addClient }) {
       rate: Number(form.rate) || 0,
       emoji: "○",
       tagline: "",
-    });
-    if (!saved) { setErr("No se pudo crear. Revisa permisos RLS de clients."); return; }
-    setShowNew(false);
-    setForm({ name: "", slug: "", sector: "", plan: "Retainer", mrr: "", rate: 50 });
-    nav("clientes", slug);
+      });
+      if (!saved) { setErr("No se pudo crear. Revisa permisos RLS de clients."); return; }
+      setShowNew(false);
+      setForm({ name: "", slug: "", sector: "", plan: "Retainer", mrr: "", rate: 50 });
+      nav("clientes", saved.slug || slug);
+    } catch (error) {
+      console.error("client create:", error);
+      setErr("No se pudo crear el cliente. Revisa la consola y permisos RLS de clients.");
+    }
   };
   return (
     <Shell>
@@ -1218,7 +1245,7 @@ function ClientesPage({ nav, clients, user, addClient }) {
    CLIENT DETAIL
 ════════════════════════════════════════════════════════════════════ */
 function ClientDetail({ clientId, clients, updateClient, user, timeEntries, addTimeEntry, removeTimeEntry }) {
-  const data = clients[clientId];
+  const data = fromDb(clients[clientId]);
   const isEditor = user.role === "editor";
   const isClient = user.role === "client";
   const canEdit = !isEditor && !isClient;
