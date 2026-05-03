@@ -134,12 +134,10 @@ alter table deals        enable row level security;
 
 -- Helper: obtener rol del usuario actual
 create or replace function current_user_role()
-returns text language sql security definer stable as $$
-  select role
-  from profiles
-  where id = auth.uid()
-     or lower(email) = lower(auth.jwt()->>'email')
-  limit 1
+returns text language sql security definer
+set search_path = public
+stable as $$
+  select role from profiles where id = auth.uid() limit 1
 $$;
 
 -- PROFILES
@@ -239,6 +237,13 @@ end;
 $$;
 
 grant execute on function ensure_my_profile() to authenticated;
+
+-- Permisos base de tabla (requerido para que RLS pueda evaluarse)
+grant select, insert, update, delete on public.profiles     to authenticated;
+grant select, insert, update, delete on public.invitations  to authenticated;
+grant select, insert, update, delete on public.clients      to authenticated;
+grant select, insert, update, delete on public.time_entries to authenticated;
+grant select, insert, update, delete on public.deals        to authenticated;
 
 create or replace function upsert_invitation(
   invite_email text,
