@@ -87,58 +87,30 @@ const DB_READY = _dbReady;
 
 /* ── Auth ────────────────────────────────────────────────────────── */
 const dbAuth = {
-  // Intenta sign in; si falla, intenta sign up (auto-register)
   signIn: async (email, password) => {
     if (!DB_READY) {
       return { error: "Supabase no está configurado. Revisa las variables de entorno." };
     }
-    // Intenta sign in
     const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-    if (!signInError) {
-      let profile = await dbUsers.ensureProfile();
-      if (!profile) profile = await dbUsers.getProfile(signInData.user.id);
-      if (!profile) profile = await dbUsers.getProfileByEmail(signInData.user.email);
-      // Si perfil no existe, retorna usuario temporal
-      if (!profile) {
-        profile = await dbUsers.upsert({
-          id: signInData.user.id,
-          email: signInData.user.email,
-          name: signInData.user.email.split("@")[0],
-          role: "client",
-          workspaces: ["frame"],
-        });
-      }
-      if (!profile) {
-        return { error: "Sesión creada, pero no se pudo leer o crear el perfil. Revisa las políticas RLS de profiles." };
-      }
-      return { user: profile };
+    if (signInError) {
+      return { error: "Email o contraseña incorrectos. Si eres nuevo, revisa el correo de invitación que te enviamos." };
     }
-
-    // Si falla, intenta sign up
-    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { name: email.split("@")[0] } },
-    });
-    if (signUpError) return { error: signUpError.message };
-    if (!signUpData?.user) return { error: "Supabase no devolvió el usuario creado." };
-    if (!signUpData.session) {
-      return { error: "Registro creado. Revisa tu email para confirmar la cuenta antes de entrar." };
+    let profile = await dbUsers.ensureProfile();
+    if (!profile) profile = await dbUsers.getProfile(signInData.user.id);
+    if (!profile) profile = await dbUsers.getProfileByEmail(signInData.user.email);
+    if (!profile) {
+      profile = await dbUsers.upsert({
+        id: signInData.user.id,
+        email: signInData.user.email,
+        name: signInData.user.email.split("@")[0],
+        role: "client",
+        workspaces: ["frame"],
+      });
     }
-
-    const created = await waitForProfile(signUpData.user.id) || await dbUsers.upsert({
-      id: signUpData.user.id,
-      email,
-      name: email.split("@")[0],
-      role: "client",
-      workspaces: ["frame"],
-    });
-    if (!created) {
-      const byEmail = await dbUsers.getProfileByEmail(email);
-      if (byEmail) return { user: byEmail };
-      return { error: "Usuario creado, pero no se pudo crear el perfil. Revisa el trigger handle_new_user y las políticas RLS de profiles." };
+    if (!profile) {
+      return { error: "Sesión creada, pero no se pudo leer o crear el perfil. Revisa las políticas RLS de profiles." };
     }
-    return { user: created };
+    return { user: profile };
   },
   signOut: async () => {
     if (!DB_READY) return;
@@ -1258,9 +1230,13 @@ function ClientesPage({ nav, clients, user, addClient }) {
           if (existing && user.role === "admin") {
             await dbUsers.update(existing.id, { role: "client", workspace: saved.slug || slug, workspaces: null });
           }
-          setMsg(`Cliente creado e invitación preparada para ${email}.`);
+          if (invited.auth_warning) {
+            setMsg(`Cliente creado, pero el correo no se pudo enviar: ${invited.auth_warning}`);
+          } else {
+            setMsg(`✓ Cliente creado e invitación enviada a ${email}.`);
+          }
         } else {
-          setMsg("Cliente creado. No se pudo enviar la invitación; revisa SUPABASE_SERVICE_ROLE_KEY y el correo de Supabase.");
+          setMsg("Cliente creado. No se pudo enviar la invitación; revisa SUPABASE_SERVICE_ROLE_KEY en Vercel.");
         }
       }
 
@@ -2920,11 +2896,15 @@ function UsersPage({ clients, currentUser }) {
     };
     const saved = await dbInvitations.send(invite);
     if (!saved) {
-      setMsg("No se pudo enviar la invitación. Revisa SUPABASE_SERVICE_ROLE_KEY y la configuración de correo de Supabase.");
+      setMsg("Error: no se pudo guardar la invitación. Revisa SUPABASE_SERVICE_ROLE_KEY en Vercel.");
       return;
     }
     setForm({ email: "", role: "client", workspace: "frame", workspacesText: "frame" });
-    setMsg("Invitación enviada y guardada. Cuando ese email acepte el correo, recibirá su rol automáticamente.");
+    if (saved.auth_warning) {
+      setMsg(`Acceso guardado, pero el correo no se pudo enviar: ${saved.auth_warning}`);
+    } else {
+      setMsg(`✓ Invitación enviada a ${email}. Cuando acepte el correo recibirá su rol automáticamente.`);
+    }
     await load();
   };
 

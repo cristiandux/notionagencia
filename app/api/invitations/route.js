@@ -46,7 +46,8 @@ export async function POST(request) {
       return json({ error: storeError.message || "No se pudo guardar la invitación." }, 400);
     }
 
-    const redirectTo = new URL("/?invited=1", request.url).toString();
+    const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "").trim().replace(/\/$/, "");
+    const redirectTo = siteUrl ? `${siteUrl}/?invited=1` : new URL("/?invited=1", request.url).toString();
     const { data: authInvite, error: authError } = await supabase.auth.admin.inviteUserByEmail(email, {
       data: {
         name: displayName,
