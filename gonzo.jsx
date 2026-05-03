@@ -337,9 +337,11 @@ const dbClients = {
     return fromDb(data);
   },
   updateField: async (slug, field, value) => {
-    if (!DB_READY) return;
+    if (!DB_READY) return false;
     const dbField = { goalText: "goal_text", rawFiles: "raw_files", replyTemplates: "reply_templates" }[field] || field;
-    await supabase.from("clients").update({ [dbField]: value }).eq("slug", slug);
+    const { error } = await supabase.from("clients").update({ [dbField]: value }).eq("slug", slug);
+    if (error) console.error(`updateField ${field}:`, error.message);
+    return !error;
   },
 };
 
@@ -539,7 +541,10 @@ function GonzoAppInner() {
   const updateClient = async (id, patch) => {
     setClients(c => ({ ...c, [id]: { ...(c[id] || EMPTY_CLIENT(id)), ...patch } }));
     const field = Object.keys(patch)[0];
-    if (field) await dbClients.updateField(id, field, patch[field]);
+    if (field) {
+      const ok = await dbClients.updateField(id, field, patch[field]);
+      if (!ok) console.warn(`No se guardó ${field} en ${id} — revisa tu rol en Supabase (necesitas admin o socio)`);
+    }
   };
 
   const addClient = async (slug, data) => {
