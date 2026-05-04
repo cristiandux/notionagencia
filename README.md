@@ -41,8 +41,13 @@ En Vercel o el proveedor elegido, configura estas variables:
 
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` para enviar invitaciones de Supabase Auth
+- `SUPABASE_SECRET_KEY` opcional como clave elevada server-side para base de datos
+- `RESEND_API_KEY` opcional para enviar el email directamente con Resend
+- `RESEND_FROM` opcional, por ejemplo `Gonzo Agencia <hola@tu-dominio.com>`
 
 No subas `.env.local`; ya esta ignorado por Git.
 
-Las invitaciones de cliente se envian desde el servidor usando la clave de servicio de Supabase. Si el email no sale, revisa tambien la configuracion de correo de Supabase Auth en tu proyecto.
+Las invitaciones de cliente se guardan desde el servidor usando una clave elevada de Supabase. Para generar enlaces de invitacion de Supabase Auth configura la clave legacy `service_role` en `SUPABASE_SERVICE_ROLE_KEY`. Si defines `RESEND_API_KEY` y `RESEND_FROM`, la app genera el enlace de invitacion y lo manda directamente con Resend; `RESEND_FROM` debe pertenecer a un dominio verificado en Resend. Si no defines Resend, se usa `supabase.auth.admin.inviteUserByEmail`.
+
+Si usas `onboarding@resend.dev`, Resend solo permite enviar emails de prueba al email propietario/verificado de tu cuenta de Resend. Para enviar invitaciones a clientes reales necesitas verificar un dominio propio en Resend y usar ese dominio en `RESEND_FROM`.

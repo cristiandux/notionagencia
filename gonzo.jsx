@@ -149,7 +149,7 @@ const dbUsers = {
   },
   getProfileByEmail: async (email) => {
     if (!DB_READY || !email) return null;
-    const { data, error } = await supabase.from("profiles").select("*").ilike("email", email).single();
+    const { data, error } = await supabase.from("profiles").select("*").ilike("email", email).maybeSingle();
     if (error) {
       console.error("profile by email:", error);
       return null;
@@ -203,7 +203,7 @@ const dbInvitations = {
     return data || [];
   },
   send: async (invite) => {
-    if (!invite?.email) return null;
+    if (!invite?.email) return { error: "El email es obligatorio." };
     try {
       const response = await fetch("/api/invitations", {
         method: "POST",
@@ -212,8 +212,9 @@ const dbInvitations = {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        console.error("invite send:", data?.error || response.statusText);
-        return null;
+        const msg = data?.error || response.statusText || "Error desconocido";
+        console.error("invite send:", msg);
+        return { error: msg };
       }
       if (data?.auth_warning) {
         console.warn("auth invite warning:", data.auth_warning);
@@ -221,7 +222,7 @@ const dbInvitations = {
       return data;
     } catch (error) {
       console.error("invite send:", error);
-      return null;
+      return { error: error?.message || "Error de red." };
     }
   },
   upsert: async (invite) => {
@@ -1230,18 +1231,18 @@ function ClientesPage({ nav, clients, user, addClient }) {
           invited_by: user.id,
         };
         const invited = await dbInvitations.send(invite);
-        if (invited) {
+        if (invited && !invited.error) {
           const existing = await dbUsers.getProfileByEmail(email);
           if (existing && user.role === "admin") {
             await dbUsers.update(existing.id, { role: "client", workspace: saved.slug || slug, workspaces: null });
           }
           if (invited.auth_warning) {
-            setMsg(`Cliente creado, pero el correo no se pudo enviar: ${invited.auth_warning}`);
+            setMsg(`Cliente creado, pero el correo no se pudo enviar: ${invited.auth_warning}${invited.invite_link ? ` Link manual: ${invited.invite_link}` : ""}`);
           } else {
             setMsg(`✓ Cliente creado e invitación enviada a ${email}.`);
           }
         } else {
-          setMsg("Cliente creado. No se pudo enviar la invitación; revisa SUPABASE_SERVICE_ROLE_KEY en Vercel.");
+          setMsg(`Cliente creado. No se pudo enviar la invitación: ${invited?.error || "error desconocido"}`);
         }
       }
 
@@ -2900,13 +2901,17 @@ function UsersPage({ clients, currentUser }) {
       invited_by: currentUser.id,
     };
     const saved = await dbInvitations.send(invite);
+    if (saved?.error) {
+      setMsg(`Error al guardar la invitación: ${saved.error}`);
+      return;
+    }
     if (!saved) {
-      setMsg("Error: no se pudo guardar la invitación. Revisa SUPABASE_SERVICE_ROLE_KEY en Vercel.");
+      setMsg("Error desconocido al guardar la invitación.");
       return;
     }
     setForm({ email: "", role: "client", workspace: "frame", workspacesText: "frame" });
     if (saved.auth_warning) {
-      setMsg(`Acceso guardado, pero el correo no se pudo enviar: ${saved.auth_warning}`);
+      setMsg(`Acceso guardado, pero el correo no se pudo enviar: ${saved.auth_warning}${saved.invite_link ? ` Link manual: ${saved.invite_link}` : ""}`);
     } else {
       setMsg(`✓ Invitación enviada a ${email}. Cuando acepte el correo recibirá su rol automáticamente.`);
     }
