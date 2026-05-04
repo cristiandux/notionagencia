@@ -360,6 +360,56 @@ $$;
 grant execute on function create_client_workspace(text, text, text, text, text, integer) to authenticated;
 grant execute on function create_client_workspace(text, text, text, text, text, integer) to service_role;
 
+create or replace function append_client_chat(
+  client_slug text,
+  message jsonb
+)
+returns clients
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  c clients;
+  allowed boolean;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  if message is null or coalesce(message->>'text', '') = '' then
+    raise exception 'message text is required';
+  end if;
+
+  select
+    current_user_role() in ('admin','socio')
+    or (
+      current_user_role() = 'client'
+      and client_slug = (select workspace from profiles where id = auth.uid())
+    )
+  into allowed;
+
+  if not coalesce(allowed, false) then
+    raise exception 'not allowed to write this chat';
+  end if;
+
+  update clients
+  set chat = coalesce(chat, '[]'::jsonb) || jsonb_build_array(message),
+      updated_at = now()
+  where slug = client_slug
+  returning * into c;
+
+  if c.slug is null then
+    raise exception 'client not found';
+  end if;
+
+  return c;
+end;
+$$;
+
+grant execute on function append_client_chat(text, jsonb) to authenticated;
+grant execute on function append_client_chat(text, jsonb) to service_role;
+
 -- INVITATIONS
 drop policy if exists "invitations_admin_all" on invitations;
 create policy "invitations_admin_all" on invitations for all

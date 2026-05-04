@@ -344,6 +344,24 @@ const dbClients = {
     if (error) console.error(`updateField ${field}:`, error.message);
     return !error;
   },
+  appendChat: async (slug, message) => {
+    if (!DB_READY) return null;
+    const { data, error } = await supabase.rpc("append_client_chat", {
+      client_slug: slug,
+      message,
+    });
+    if (error) {
+      console.error("append_client_chat:", error.message);
+      return null;
+    }
+    return fromDb(data);
+  },
+  delete: async (slug) => {
+    if (!DB_READY) return false;
+    const { error } = await supabase.from("clients").delete().eq("slug", slug);
+    if (error) console.error("client delete:", error.message);
+    return !error;
+  },
 };
 
 /* ── Time entries ────────────────────────────────────────────────── */
@@ -530,6 +548,15 @@ function GonzoAppInner() {
     await loadUserData(u);
   };
 
+  useEffect(() => {
+    if (!user || !DB_READY) return undefined;
+    const timer = window.setInterval(async () => {
+      const cd = await dbClients.getAll();
+      if (cd && Object.keys(cd).length > 0) setClients(cd);
+    }, 8000);
+    return () => window.clearInterval(timer);
+  }, [user?.id]);
+
   const onLogout = async () => {
     await dbAuth.signOut();
     setUser(null); setActiveWs(null);
@@ -543,6 +570,13 @@ function GonzoAppInner() {
     setClients(c => ({ ...c, [id]: { ...(c[id] || EMPTY_CLIENT(id)), ...patch } }));
     const field = Object.keys(patch)[0];
     if (field) {
+      if (field === "chat") {
+        const message = patch[field]?.[patch[field].length - 1];
+        const saved = await dbClients.appendChat(id, message);
+        if (saved) setClients(c => ({ ...c, [id]: saved }));
+        if (!saved) console.warn(`No se guardo chat en ${id}`);
+        return;
+      }
       const ok = await dbClients.updateField(id, field, patch[field]);
       if (!ok) console.warn(`No se guardó ${field} en ${id} — revisa tu rol en Supabase (necesitas admin o socio)`);
     }
@@ -553,6 +587,17 @@ function GonzoAppInner() {
     const saved = await dbClients.upsert(slug, nc);
     if (saved) setClients(c => ({ ...c, [slug]: saved }));
     return saved;
+  };
+
+  const removeClient = async (slug) => {
+    if (!slug || slug === "frame") return false;
+    const ok = await dbClients.delete(slug);
+    if (ok) setClients(c => {
+      const next = { ...c };
+      delete next[slug];
+      return next;
+    });
+    return ok;
   };
 
   // Time entries
@@ -594,7 +639,7 @@ function GonzoAppInner() {
         <>
           <Workspace
             user={user} activeWs={activeWs} onSwitchWs={onSwitchWs} onLogout={onLogout}
-            clients={clients} updateClient={updateClient} addClient={addClient}
+            clients={clients} updateClient={updateClient} addClient={addClient} removeClient={removeClient}
             timeEntries={timeEntries} addTimeEntry={addTimeEntry} removeTimeEntry={removeTimeEntry}
             deals={deals} upsertDeal={upsertDeal} removeDeal={removeDeal} moveDeal={moveDeal}
             onSearch={() => setShowSearch(true)}
@@ -923,7 +968,7 @@ function Login({ onLogin }) {
 }
 
 /* ─── WORKSPACE ─────────────────────────────────────────────────── */
-function Workspace({ user, activeWs, onSwitchWs, onLogout, clients, updateClient, addClient, timeEntries, addTimeEntry, removeTimeEntry, deals, upsertDeal, removeDeal, moveDeal, onSearch }) {
+function Workspace({ user, activeWs, onSwitchWs, onLogout, clients, updateClient, addClient, removeClient, timeEntries, addTimeEntry, removeTimeEntry, deals, upsertDeal, removeDeal, moveDeal, onSearch }) {
   const init = user.role === "client" ? "client-panel" : user.role === "editor" ? "clientes" : "home";
   const [page, setPage] = useState(init);
   const [cid, setCid] = useState(user.role === "client" ? user.workspace : null);
@@ -977,7 +1022,7 @@ function Workspace({ user, activeWs, onSwitchWs, onLogout, clients, updateClient
           <Topbar page={page} cid={cid} nav={nav} onMenu={() => setMobNav(true)} onSearch={onSearch} clients={clients} />
           <div className="fade-up" key={page + (cid || "") + activeWs}>
             {page === "home" && <HomePage user={user} nav={nav} clients={clients} timeEntries={timeEntries} deals={deals} />}
-            {page === "clientes" && !cid && <ClientesPage nav={nav} clients={clients} user={user} addClient={addClient} />}
+            {page === "clientes" && !cid && <ClientesPage nav={nav} clients={clients} user={user} addClient={addClient} removeClient={removeClient} />}
             {page === "clientes" && cid && <ClientDetail clientId={cid} clients={clients} updateClient={updateClient} user={user} timeEntries={timeEntries} addTimeEntry={addTimeEntry} removeTimeEntry={removeTimeEntry} />}
             {page === "calendar" && <ContentCalendar clients={clients} updateClient={updateClient} />}
             {page === "inbox" && <InboxPage clients={clients} updateClient={updateClient} />}
@@ -1192,7 +1237,7 @@ function HomePage({ user, nav, clients, timeEntries, deals }) {
 /* ════════════════════════════════════════════════════════════════════
    CLIENTES LIST
 ════════════════════════════════════════════════════════════════════ */
-function ClientesPage({ nav, clients, user, addClient }) {
+function ClientesPage({ nav, clients, user, addClient, removeClient }) {
   const ids = Object.keys(clients).filter(k => k !== "frame");
   const isEd = user.role === "editor";
   const canCreate = user.role === "admin" || user.role === "socio";
@@ -1202,6 +1247,12 @@ function ClientesPage({ nav, clients, user, addClient }) {
   const [form, setForm] = useState({ name: "", slug: "", sector: "", plan: "Retainer", mrr: "", rate: 50, email: "" });
   const slugify = (value) => value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
   const setName = (name) => setForm(f => ({ ...f, name, slug: f.slug || slugify(name) }));
+  const remove = async (id, name) => {
+    if (!canCreate) return;
+    if (!window.confirm(`Eliminar ${name || id}? Se borraran tambien sus horas asociadas.`)) return;
+    const ok = await removeClient?.(id);
+    if (!ok) setErr("No se pudo borrar el cliente. Revisa permisos RLS de clients.");
+  };
   const create = async (e) => {
     e?.preventDefault?.();
     setErr("");
@@ -1307,12 +1358,23 @@ function ClientesPage({ nav, clients, user, addClient }) {
           const c = clients[id];
           if (!c) return null;
           return (
-            <button key={id} onClick={() => nav("clientes", id)} className="card card-hov" style={{ background: "#f5f5f7", border: "none", padding: 0, fontFamily: "inherit", textAlign: "left", cursor: "pointer" }}>
+            <div key={id} className="card card-hov" style={{ background: "#f5f5f7", border: "none", padding: 0, fontFamily: "inherit", textAlign: "left", cursor: "pointer", overflow: "hidden" }} onClick={() => nav("clientes", id)}>
               <div style={{ height: 176, background: c.cover, position: "relative" }}>
                 <div style={{ position: "absolute", top: 16, right: 16, padding: "4px 10px", borderRadius: 999, background: "rgba(255,255,255,.92)", display: "flex", alignItems: "center", gap: 6 }}>
                   <div style={{ width: 6, height: 6, borderRadius: 999, background: "#34C759" }} />
                   <span className="t-mic-b">activo</span>
                 </div>
+                {canCreate && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); remove(id, c.name); }}
+                    className="btn btn-ghost"
+                    style={{ position: "absolute", top: 16, left: 16, background: "rgba(255,255,255,.92)", color: "#FF3B30" }}
+                    title="Eliminar cliente"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
               </div>
               <div style={{ padding: 28 }}>
                 <div className="t-tile" style={{ fontWeight: 600, letterSpacing: "-0.28px", marginBottom: 4 }}>{c.name}</div>
@@ -1327,7 +1389,7 @@ function ClientesPage({ nav, clients, user, addClient }) {
                   </>}
                 </div>
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
